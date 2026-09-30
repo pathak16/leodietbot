@@ -4,7 +4,11 @@ from datetime import datetime
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
+from pydantic import BaseModel
 
+class FormSubmission(BaseModel):
+    first_name: str
+    phone_number: str
 load_dotenv()
 
 app = FastAPI(title="Dietary Study Bot")
@@ -28,12 +32,90 @@ def init_db():
             image_path TEXT
         )
     """)
+
+    # Participants table: anchors their individual 15-day clock
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            phone_number TEXT PRIMARY KEY,
+            first_name TEXT,
+            start_timestamp INTEGER,
+            status TEXT DEFAULT 'active'
+        )
+    """)
+
     conn.commit()
     conn.close()
 
 init_db()
 
-# 2. Worker to download media, save to disk, record in DB, and reply
+# 3. Worker to send the onboarding message via Meta Graph API
+def send_welcome_message(phone_number: str, first_name: str):
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+
+    message_body = (
+        f"Hey {first_name}! 👋 Welcome to the 15-Day Energy Audit. You are officially in.\n\n"
+        "For the next two weeks, this chat is your private, zero-judgment daily log. "
+        "There is no calorie counting, no \"good\" or \"bad\" foods, and no clinical tracking apps. "
+        "We just want to see how you naturally fuel your busy days.\n\n"
+        "Your only task: Whenever you eat or drink *anything*, just snap a quick photo and send it right here. "
+        "This includes your main meals, but just as importantly, we want to see the liquids that keep you going. "
+        "Whether you grab a Gatorade at 11 AM, rely on a coffee to survive the 4 PM wall, or just sip on a traditional chaas, "
+        "if you consume it, send a photo of it.\n\n"
+        "To activate your log, snap a photo of your next meal, snack, or drink and send it over. Let’s get started! 📸"
+    )
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "text",
+        "text": {"body": message_body}
+    }
+
+    try:
+        res = requests.post(url, headers=headers, json=payload)
+        if res.status_code != 200:
+            print(f"[Error] Failed to send welcome message to {phone_number}: {res.text}")
+        else:
+            print(f"[Success] Welcome message delivered to {phone_number} ({first_name})")
+    except Exception as e:
+        print(f"[Exception] Failed sending welcome ping: {e}")
+
+
+# 2. Form Registration Endpoint
+@app.post("/register")
+async def register_volunteer(user: FormSubmission, bg_tasks: BackgroundTasks):
+    current_ts = int(datetime.now().timestamp())
+    
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    try:
+        # Save or update participant with their starting timestamp
+        c.execute("""
+            INSERT INTO users (phone_number, first_name, start_timestamp, status)
+            VALUES (?, ?, ?, 'active')
+            ON CONFLICT(phone_number) DO UPDATE SET
+                first_name=excluded.first_name,
+                start_timestamp=excluded.start_timestamp,
+                status='active'
+        """, (user.phone_number, user.first_name, current_ts))
+        conn.commit()
+        print(f"[User Registered] {user.first_name} ({user.phone_number}) registered at ts: {current_ts}")
+        
+        # Trigger WhatsApp message asynchronously so Google Apps Script doesn't block
+        bg_tasks.add_task(send_welcome_message, user.phone_number, user.first_name)
+    except Exception as e:
+        print(f"[Database Error] Could not register user: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        conn.close()
+
+    return {"status": "success", "message": f"Registered {user.first_name}"}
+
+# 3. Worker to download media, save to disk, record in DB, and reply
 def process_incoming_meal(media_id: str, sender: str, caption: str):
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
     try:
@@ -83,7 +165,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
 
-# 3. Meta Webhook Handshake Verification (GET)
+# 4. Meta Webhook Handshake Verification (GET)
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
@@ -92,7 +174,7 @@ async def verify_webhook(request: Request):
         return Response(content=params.get("hub.challenge"), media_type="text/plain")
     return Response(content="Token mismatch", status_code=403)
 
-# 4. Inbound Webhook Listener (POST)
+# 5. Inbound Webhook Listener (POST)
 @app.post("/webhook")
 async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
     data = await request.json()
