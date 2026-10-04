@@ -5,10 +5,16 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 from pydantic import BaseModel
+import pytz
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime, timedelta
+
 
 class FormSubmission(BaseModel):
     first_name: str
     phone_number: str
+
+
 load_dotenv()
 
 app = FastAPI(title="Dietary Study Bot")
@@ -18,11 +24,13 @@ PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
 DB_FILE = "test_study.db"
 
+
 # 1. Initialize SQLite Database
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("""
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS test_meal_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             phone_number TEXT,
@@ -31,32 +39,37 @@ def init_db():
             caption TEXT,
             image_path TEXT
         )
-    """)
+    """
+    )
 
     # Participants table: anchors their individual 15-day clock
-    c.execute("""
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             phone_number TEXT PRIMARY KEY,
             first_name TEXT,
             start_timestamp INTEGER,
             status TEXT DEFAULT 'active'
         )
-    """)
+    """
+    )
 
     conn.commit()
     conn.close()
 
+
 init_db()
+
 
 # 3. Worker to send the onboarding message via Meta Graph API
 def send_welcome_message(phone_number: str, first_name: str):
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
 
-# Updated payload using the approved template schema
+    # Updated payload using the approved template schema
     payload = {
         "messaging_product": "whatsapp",
         "to": phone_number,
@@ -64,28 +77,24 @@ def send_welcome_message(phone_number: str, first_name: str):
         "template": {
             "name": "welcome_message",
             "language": {
-                "code": "en_US" # Ensure this exactly matches the language code in your WhatsApp Manager
+                "code": "en"  # Ensure this exactly matches the language code in your WhatsApp Manager
             },
             "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {
-                            "type": "text",
-                            "text": first_name
-                        }
-                    ]
-                }
-            ]
-        }
+                {"type": "body", "parameters": [{"type": "text", "text": first_name}]}
+            ],
+        },
     }
 
     try:
         res = requests.post(url, headers=headers, json=payload)
         if res.status_code != 200:
-            print(f"[Error] Failed to send welcome message to {phone_number}: {res.text}")
+            print(
+                f"[Error] Failed to send welcome message to {phone_number}: {res.text}"
+            )
         else:
-            print(f"[Success] Welcome message delivered to {phone_number} ({first_name})")
+            print(
+                f"[Success] Welcome message delivered to {phone_number} ({first_name})"
+            )
     except Exception as e:
         print(f"[Exception] Failed sending welcome ping: {e}")
 
@@ -94,22 +103,27 @@ def send_welcome_message(phone_number: str, first_name: str):
 @app.post("/register")
 async def register_volunteer(user: FormSubmission, bg_tasks: BackgroundTasks):
     current_ts = int(datetime.now().timestamp())
-    
+
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     try:
         # Save or update participant with their starting timestamp
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO users (phone_number, first_name, start_timestamp, status)
             VALUES (?, ?, ?, 'active')
             ON CONFLICT(phone_number) DO UPDATE SET
                 first_name=excluded.first_name,
                 start_timestamp=excluded.start_timestamp,
                 status='active'
-        """, (user.phone_number, user.first_name, current_ts))
+        """,
+            (user.phone_number, user.first_name, current_ts),
+        )
         conn.commit()
-        print(f"[User Registered] {user.first_name} ({user.phone_number}) registered at ts: {current_ts}")
-        
+        print(
+            f"[User Registered] {user.first_name} ({user.phone_number}) registered at ts: {current_ts}"
+        )
+
         # Trigger WhatsApp message asynchronously so Google Apps Script doesn't block
         bg_tasks.add_task(send_welcome_message, user.phone_number, user.first_name)
     except Exception as e:
@@ -119,6 +133,7 @@ async def register_volunteer(user: FormSubmission, bg_tasks: BackgroundTasks):
         conn.close()
 
     return {"status": "success", "message": f"Registered {user.first_name}"}
+
 
 # 3. Worker to download media, save to disk, record in DB, and reply
 def process_incoming_meal(media_id: str, sender: str, caption: str):
@@ -151,7 +166,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         c = conn.cursor()
         c.execute(
             "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
-            (sender, datetime.now(), caption, filename)
+            (sender, datetime.now(), caption, filename),
         )
         conn.commit()
         conn.close()
@@ -163,35 +178,40 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             "messaging_product": "whatsapp",
             "to": sender,
             "type": "text",
-            "text": {"body": "Logged! 📸 Meal recorded."}
+            "text": {"body": "Logged! 📸 Meal recorded."},
         }
         requests.post(ack_endpoint, headers=headers, json=payload)
 
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
 
+
 # 4. Meta Webhook Handshake Verification (GET)
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
-    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == VERIFY_TOKEN:
+    if (
+        params.get("hub.mode") == "subscribe"
+        and params.get("hub.verify_token") == VERIFY_TOKEN
+    ):
         print("[Handshake] Webhook verified successfully with Meta!")
         return Response(content=params.get("hub.challenge"), media_type="text/plain")
     return Response(content="Token mismatch", status_code=403)
+
 
 # 5. Inbound Webhook Listener (POST)
 @app.post("/webhook")
 async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
     data = await request.json()
-    
+
     # Force the terminal to print exactly what Meta is sending
     print("\n--- INCOMING PAYLOAD ---")
     print(data)
-    
+
     try:
         entry = data.get("entry", [])[0]
         change = entry.get("changes", [])[0]["value"]
-        
+
         if "messages" in change:
             msg = change["messages"][0]
             sender = msg["from"]
@@ -209,20 +229,22 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
                 c = conn.cursor()
                 c.execute(
                     "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
-                    (sender, datetime.now(), text_body, "text_only")
+                    (sender, datetime.now(), text_body, "text_only"),
                 )
                 conn.commit()
                 conn.close()
                 print(f"[Text Log] Logged text meal from {sender}: {text_body}")
 
                 # Send brief text confirmation
-                ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+                ack_endpoint = (
+                    f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+                )
                 headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
                 payload = {
                     "messaging_product": "whatsapp",
                     "to": sender,
                     "type": "text",
-                    "text": {"body": "Logged! 📝 Meal note recorded."}
+                    "text": {"body": "Logged! 📝 Meal note recorded."},
                 }
                 requests.post(ack_endpoint, headers=headers, json=payload)
 
@@ -230,3 +252,113 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
         print(f"\n[Parsing Error] The script failed here: {err}")
 
     return {"status": "success"}
+
+
+def push_template_message(phone_number, template_name):
+    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "template",
+        "template": {"name": template_name, "language": {"code": "en"}},
+    }
+    try:
+        res = requests.post(endpoint, headers=headers, json=payload)
+        if res.status_code == 200:
+            print(f"[API Success] Meta accepted {template_name} for {phone_number}")
+        else:
+            print(f"[API Error] Meta rejected {phone_number}: {res.text}")
+
+    except Exception as e:
+        print(f"[API Error] Failed to send {template_name} to {phone_number}: {e}")
+
+
+def run_fixed_reminders(template_name):
+    """Fires at exact times regardless of user activity."""
+    print(f"[Scheduler] Executing fixed blast: {template_name}")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT phone_number FROM users WHERE status = 'active'")
+    users = c.fetchall()
+    conn.close()
+
+    for (phone_number,) in users:
+        push_template_message(phone_number, template_name)
+        print(f" -> Sent fixed reminder to {phone_number}")
+
+
+def run_conditional_nudges(hours_of_silence, template_name):
+    """Checks DB and only fires if the user has been silent for X hours."""
+    print(f"[Scheduler] Checking for users silent for {hours_of_silence} hours...")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT u.phone_number, u.start_timestamp, MAX(m.timestamp) as last_meal_time
+        FROM users u
+        LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+        WHERE u.status = 'active'
+        GROUP BY u.phone_number
+    """
+    )
+    users_data = c.fetchall()
+    conn.close()
+
+    now = datetime.now()
+    silence_threshold = timedelta(hours=hours_of_silence)
+
+    for phone_number, start_ts, last_meal_time_str in users_data:
+        if last_meal_time_str:
+            try:
+                last_activity = datetime.fromisoformat(last_meal_time_str)
+            except ValueError:
+                last_activity = datetime.strptime(
+                    last_meal_time_str.split(".")[0], "%Y-%m-%d %H:%M:%S"
+                )
+        else:
+            last_activity = datetime.fromtimestamp(start_ts)
+
+        if (now - last_activity) >= silence_threshold:
+            push_template_message(phone_number, template_name)
+            print(f" -> Sent missed-meal nudge to {phone_number}")
+
+
+# --- STARTUP EVENT ---
+
+
+@app.on_event("startup")
+def start_scheduler():
+    # Force the scheduler to operate on IST regardless of Railway's server location
+    ist_tz = pytz.timezone("Asia/Kolkata")
+    scheduler = BackgroundScheduler(timezone=ist_tz)
+
+    # 1. The Fixed Reminders (9:00 AM, 1:00 PM, 8:00 PM)
+    scheduler.add_job(
+        run_fixed_reminders, "cron", hour=9, minute=0, args=["morning_reminder"]
+    )
+    scheduler.add_job(
+        run_fixed_reminders, "cron", hour=13, minute=0, args=["afternoon_reminder"]
+    )
+    scheduler.add_job(
+        run_fixed_reminders, "cron", hour=20, minute=0, args=["evening_reminder"]
+    )
+
+    # 2. The Conditional Nudges (11:00 AM, 3:00 PM, 10:00 PM)
+    # Triggers exactly 2 hours later, passing '2' as the hours_of_silence argument
+    scheduler.add_job(
+        run_conditional_nudges, "cron", hour=11, minute=0, args=[2, "missed_meal_nudge"]
+    )
+    scheduler.add_job(
+        run_conditional_nudges, "cron", hour=15, minute=0, args=[2, "missed_meal_nudge"]
+    )
+    scheduler.add_job(
+        run_conditional_nudges, "cron", hour=22, minute=0, args=[2, "missed_meal_nudge"]
+    )
+
+    scheduler.start()
+    print("[System] Background scheduler initialized on IST time.")
+    # print("[System] Test scheduler running: Firing every 1 minute.")
