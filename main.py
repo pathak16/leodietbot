@@ -56,23 +56,28 @@ def send_welcome_message(phone_number: str, first_name: str):
     }
     url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
 
-    message_body = (
-        f"Hey {first_name}! 👋 Welcome to the 15-Day Energy Audit. You are officially in.\n\n"
-        "For the next two weeks, this chat is your private, zero-judgment daily log. "
-        "There is no calorie counting, no \"good\" or \"bad\" foods, and no clinical tracking apps. "
-        "We just want to see how you naturally fuel your busy days.\n\n"
-        "Your only task: Whenever you eat or drink *anything*, just snap a quick photo and send it right here. "
-        "This includes your main meals, but just as importantly, we want to see the liquids that keep you going. "
-        "Whether you grab a Gatorade at 11 AM, rely on a coffee to survive the 4 PM wall, or just sip on a traditional chaas, "
-        "if you consume it, send a photo of it.\n\n"
-        "To activate your log, snap a photo of your next meal, snack, or drink and send it over. Let’s get started! 📸"
-    )
-
+# Updated payload using the approved template schema
     payload = {
         "messaging_product": "whatsapp",
         "to": phone_number,
-        "type": "text",
-        "text": {"body": message_body}
+        "type": "template",
+        "template": {
+            "name": "welcome_message",
+            "language": {
+                "code": "en_US" # Ensure this exactly matches the language code in your WhatsApp Manager
+            },
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {
+                            "type": "text",
+                            "text": first_name
+                        }
+                    ]
+                }
+            ]
+        }
     }
 
     try:
