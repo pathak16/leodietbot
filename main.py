@@ -340,24 +340,24 @@ def start_scheduler():
     scheduler.add_job(
         run_fixed_reminders, "cron", hour=9, minute=0, args=["morning_nudge_1"]
     )
-    # scheduler.add_job(
-    #     run_fixed_reminders, "cron", hour=13, minute=0, args=["afternoon_reminder"]
-    # )
-    # scheduler.add_job(
-    #     run_fixed_reminders, "cron", hour=20, minute=0, args=["evening_reminder"]
-    # )
+    scheduler.add_job(
+        run_fixed_reminders, "cron", hour=13, minute=0, args=["afternoon_nudge_1"]
+    )
+    scheduler.add_job(
+        run_fixed_reminders, "cron", hour=20, minute=0, args=["evening_nudge_1"]
+    )
 
     # 2. The Conditional Nudges (11:00 AM, 3:00 PM, 10:00 PM)
     # Triggers exactly 2 hours later, passing '2' as the hours_of_silence argument
     scheduler.add_job(
         run_conditional_nudges, "cron", hour=11, minute=0, args=[2, "missed_meal_nudge"]
     )
-    # scheduler.add_job(
-    #     run_conditional_nudges, "cron", hour=15, minute=0, args=[2, "missed_meal_nudge"]
-    # )
-    # scheduler.add_job(
-    #     run_conditional_nudges, "cron", hour=22, minute=0, args=[2, "missed_meal_nudge"]
-    # )
+    scheduler.add_job(
+        run_conditional_nudges, "cron", hour=15, minute=0, args=[2, "missed_meal_nudge"]
+    )
+    scheduler.add_job(
+        run_conditional_nudges, "cron", hour=22, minute=0, args=[2, "missed_meal_nudge"]
+    )
 
     scheduler.start()
     print("[System] Background scheduler initialized on IST time.")
