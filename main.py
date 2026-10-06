@@ -347,13 +347,28 @@ def start_scheduler():
 
     # 1. The Fixed Reminders (9:00 AM, 1:00 PM, 8:00 PM)
     scheduler.add_job(
-        run_fixed_reminders, "cron", hour=9, minute=0, args=["morning_nudge_1"]
+        run_fixed_reminders,
+        "cron",
+        hour=9,
+        minute=0,
+        misfire_grace_time=3600,
+        args=["morning_nudge_1"],
     )
     scheduler.add_job(
-        run_fixed_reminders, "cron", hour=13, minute=0, args=["afternoon_nudge_1"]
+        run_fixed_reminders,
+        "cron",
+        hour=13,
+        minute=20,
+        misfire_grace_time=3600,
+        args=["afternoon_nudge_1"],
     )
     scheduler.add_job(
-        run_fixed_reminders, "cron", hour=20, minute=0, args=["evening_nudge_1"]
+        run_fixed_reminders,
+        "cron",
+        hour=20,
+        minute=0,
+        misfire_grace_time=3600,
+        args=["evening_nudge_1"],
     )
 
     # 2. The Conditional Nudges (11:00 AM, 3:00 PM, 10:00 PM)
