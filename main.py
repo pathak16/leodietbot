@@ -16,10 +16,31 @@ app = FastAPI(title="Dietary Study Bot")
 ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
-DATA_DIR = "/app/data"
-DB_FILE = f"{DATA_DIR}/test_study.db"
-os.makedirs(f"{DATA_DIR}/images", exist_ok=True)
+def init_storage():
+    target_dir = "/app/data"
+    if os.path.exists(target_dir):
+        try:
+            test_file = os.path.join(target_dir, ".perm_test")
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+            images_dir = os.path.join(target_dir, "images")
+            os.makedirs(images_dir, exist_ok=True)
+            db_path = os.path.join(target_dir, "test_study.db")
+            print(f"[Storage] Persistent volume is active. DB: {db_path}")
+            return target_dir, images_dir, db_path
+        except Exception as e:
+            print(f"[Storage] /app/data not writable ({e}).")
+            print("[Storage] Add RAILWAY_RUN_UID=0 in Railway Variables to enable persistent volume write permissions.")
+    
+    os.makedirs("images", exist_ok=True)
+    return ".", "images", "test_study.db"
+
+DATA_DIR, IMAGE_DIR, DB_FILE = init_storage()
+app.mount("/view-images", StaticFiles(directory=IMAGE_DIR), name="images")
 
 
 # 1. Initialize SQLite Database
@@ -80,7 +101,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
         # Save to images directory
         filename = os.path.join(
-            "/app/data/images", f"{sender}_{int(datetime.now().timestamp())}.jpg"
+            IMAGE_DIR, f"{sender}_{int(datetime.now().timestamp())}.jpg"
         )
         with open(filename, "wb") as f:
             f.write(img_response.content)
@@ -108,6 +129,48 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
+
+
+# Admin Viewers to easily see users and meals in browser
+@app.get("/admin/users", response_class=HTMLResponse)
+async def view_users():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT phone_number, start_timestamp, status FROM users ORDER BY start_timestamp DESC")
+    rows = c.fetchall()
+    conn.close()
+
+    html = "<html><head><title>Participants</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;max-width:600px;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}</style></head><body>"
+    html += f"<h2>Registered Participants ({len(rows)})</h2>"
+    html += "<p><a href='/admin/meals'>View Logged Meals &amp; Photos &rarr;</a></p>"
+    html += "<table><tr><th>Phone Number</th><th>Registration Time</th><th>Status</th></tr>"
+    for phone, ts, status in rows:
+        time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+        html += f"<tr><td>{phone}</td><td>{time_str}</td><td>{status}</td></tr>"
+    html += "</table></body></html>"
+    return html
+
+
+@app.get("/admin/meals", response_class=HTMLResponse)
+async def view_meals():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC")
+    rows = c.fetchall()
+    conn.close()
+
+    html = "<html><head><title>Logged Meals</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}img{max-width:120px;border-radius:4px;}</style></head><body>"
+    html += f"<h2>Logged Meals ({len(rows)})</h2>"
+    html += "<p><a href='/admin/users'>&larr; View Participants</a></p>"
+    html += "<table><tr><th>Phone</th><th>Timestamp</th><th>Caption</th><th>Image</th></tr>"
+    for phone, ts, caption, img_path in rows:
+        img_html = "Text only"
+        if img_path and img_path != "text_only":
+            fname = os.path.basename(img_path)
+            img_html = f"<a href='/view-images/{fname}' target='_blank'><img src='/view-images/{fname}'/></a>"
+        html += f"<tr><td>{phone}</td><td>{ts}</td><td>{caption or ''}</td><td>{img_html}</td></tr>"
+    html += "</table></body></html>"
+    return html
 
 
 # 4. Meta Webhook Handshake Verification (GET)
