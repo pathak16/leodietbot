@@ -17,9 +17,8 @@ ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
 
-DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
-os.makedirs(f"{DATA_DIR}/images", exist_ok=True)
-DB_FILE = os.path.join(DATA_DIR, "test_study.db")
+DB_FILE = "/app/data/test_study.db"
+os.makedirs("/app/data/images", exist_ok=True)
 
 
 # 1. Initialize SQLite Database
@@ -79,7 +78,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             return
 
         # Save to images directory
-        filename = f"{DATA_DIR}/images/{sender}_{int(datetime.now().timestamp())}.jpg"
+        filename = f"/app/data/images{sender}_{int(datetime.now().timestamp())}.jpg"
         with open(filename, "wb") as f:
             f.write(img_response.content)
 
@@ -331,8 +330,8 @@ def start_scheduler():
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=18,
-        minute=45,
+        hour=19,
+        minute=00,
         misfire_grace_time=3600,
         args=["afternoon_nudge_1"],
     )
