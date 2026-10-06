@@ -17,8 +17,9 @@ ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
 
-DB_FILE = "/app/data/test_study.db"
-os.makedirs("/app/data/images", exist_ok=True)
+DATA_DIR = "/app/data"
+DB_FILE = f"{DATA_DIR}/test_study.db"
+os.makedirs(f"{DATA_DIR}/images", exist_ok=True)
 
 
 # 1. Initialize SQLite Database
@@ -78,7 +79,9 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             return
 
         # Save to images directory
-        filename = f"/app/data/images{sender}_{int(datetime.now().timestamp())}.jpg"
+        filename = os.path.join(
+            "/app/data/images", f"{sender}_{int(datetime.now().timestamp())}.jpg"
+        )
         with open(filename, "wb") as f:
             f.write(img_response.content)
 
