@@ -216,6 +216,15 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
             msg = change["messages"][0]
             sender = msg["from"]
 
+            # --- ADD THIS EXPIRATION CHECK ---
+            msg_timestamp = int(msg["timestamp"])
+            current_time = int(time.time())
+
+            # If the message is older than 120 seconds, ignore it
+            if current_time - msg_timestamp > 120:
+                print(f"Ignored backlogged message from {sender}")
+                return {"status": "success"}
+
             # Scenario A: Participant sent an image
             if msg["type"] == "image":
                 media_id = msg["image"]["id"]
