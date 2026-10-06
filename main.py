@@ -164,23 +164,14 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
 
                 # --- THE ZERO-COST ONBOARDING TRIGGER ---
                 if "ready to start" in text_body.lower() or text_body.lower() == "hi":
-
-                    contact_name = (
-                        change.get("contacts", [{}])[0]
-                        .get("profile", {})
-                        .get("name", "Friend")
-                    )
-                    first_name = contact_name.split()[0]
-
                     # 1. Register them in the database
                     c.execute(
                         """
-                        INSERT INTO users (phone_number, first_name, start_timestamp, status)
-                        VALUES (?, ?, ?, 'active')
-                        ON CONFLICT(phone_number) DO UPDATE SET
-                            first_name = excluded.first_name
+                        INSERT INTO users (phone_number, start_timestamp, status)
+                        VALUES (?, ?, 'active')
+                        ON CONFLICT(phone_number) DO NOTHING
                     """,
-                        (sender, first_name, current_ts),
+                        (sender, current_ts),
                     )
                     conn.commit()
 
@@ -239,7 +230,7 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
     return {"status": "success"}
 
 
-def push_template_message(phone_number, template_name, first_name="Friend"):
+def push_template_message(phone_number, template_name):
     endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
@@ -249,16 +240,7 @@ def push_template_message(phone_number, template_name, first_name="Friend"):
         "messaging_product": "whatsapp",
         "to": phone_number,
         "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {"code": "en"},
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": first_name or "Friend"}],
-                }
-            ],
-        },
+        "template": {"name": template_name, "language": {"code": "en"}},
     }
     try:
         res = requests.post(endpoint, headers=headers, json=payload)
@@ -276,13 +258,13 @@ def run_fixed_reminders(template_name):
     print(f"[Scheduler] Executing fixed blast: {template_name}")
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT phone_number, first_name FROM users WHERE status = 'active'")
+    c.execute("SELECT phone_number FROM users WHERE status = 'active'")
     users = c.fetchall()
     conn.close()
 
-    for phone_number, first_name in users:
-        push_template_message(phone_number, template_name, first_name)
-        print(f" -> Sent fixed reminder to {phone_number} ")
+    for (phone_number,) in users:
+        push_template_message(phone_number, template_name)
+        print(f" -> Sent fixed reminder to {phone_number}")
 
 
 def run_conditional_nudges(hours_of_silence, template_name):
@@ -292,7 +274,7 @@ def run_conditional_nudges(hours_of_silence, template_name):
     c = conn.cursor()
     c.execute(
         """
-        SELECT u.phone_number, u.first_name, u.start_timestamp, MAX(m.timestamp) as last_meal_time
+        SELECT u.phone_number, u.start_timestamp, MAX(m.timestamp) as last_meal_time
         FROM users u
         LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
         WHERE u.status = 'active'
@@ -305,7 +287,7 @@ def run_conditional_nudges(hours_of_silence, template_name):
     now = datetime.now()
     silence_threshold = timedelta(hours=hours_of_silence)
 
-    for phone_number, first_name, start_ts, last_meal_time_str in users_data:
+    for phone_number, start_ts, last_meal_time_str in users_data:
         if last_meal_time_str:
             try:
                 last_activity = datetime.fromisoformat(last_meal_time_str)
@@ -317,7 +299,7 @@ def run_conditional_nudges(hours_of_silence, template_name):
             last_activity = datetime.fromtimestamp(start_ts)
 
         if (now - last_activity) >= silence_threshold:
-            push_template_message(phone_number, template_name, first_name)
+            push_template_message(phone_number, template_name)
             print(f" -> Sent missed-meal nudge to {phone_number}")
 
 
@@ -342,8 +324,8 @@ def start_scheduler():
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=16,
-        minute=15,
+        hour=17,
+        minute=35,
         misfire_grace_time=3600,
         args=["afternoon_nudge_1"],
     )
