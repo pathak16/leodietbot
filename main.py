@@ -1,20 +1,14 @@
 import os
+import time
 
 os.makedirs("/app/data/images", exist_ok=True)
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
-from pydantic import BaseModel
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime, timedelta
-
-
-class FormSubmission(BaseModel):
-    first_name: str
-    phone_number: str
 
 
 load_dotenv()
@@ -61,80 +55,6 @@ def init_db():
 
 
 init_db()
-
-
-# 3. Worker to send the onboarding message via Meta Graph API
-def send_welcome_message(phone_number: str, first_name: str):
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-
-    # Updated payload using the approved template schema
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone_number,
-        "type": "template",
-        "template": {
-            "name": "welcome_message",
-            "language": {
-                "code": "en"  # Ensure this exactly matches the language code in your WhatsApp Manager
-            },
-            "components": [
-                {"type": "body", "parameters": [{"type": "text", "text": first_name}]}
-            ],
-        },
-    }
-
-    try:
-        res = requests.post(url, headers=headers, json=payload)
-        if res.status_code != 200:
-            print(
-                f"[Error] Failed to send welcome message to {phone_number}: {res.text}"
-            )
-        else:
-            print(
-                f"[Success] Welcome message delivered to {phone_number} ({first_name})"
-            )
-    except Exception as e:
-        print(f"[Exception] Failed sending welcome ping: {e}")
-
-
-# 2. Form Registration Endpoint
-@app.post("/register")
-async def register_volunteer(user: FormSubmission, bg_tasks: BackgroundTasks):
-    current_ts = int(datetime.now().timestamp())
-
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    try:
-        # Save or update participant with their starting timestamp
-        c.execute(
-            """
-            INSERT INTO users (phone_number, first_name, start_timestamp, status)
-            VALUES (?, ?, ?, 'active')
-            ON CONFLICT(phone_number) DO UPDATE SET
-                first_name=excluded.first_name,
-                start_timestamp=excluded.start_timestamp,
-                status='active'
-        """,
-            (user.phone_number, user.first_name, current_ts),
-        )
-        conn.commit()
-        print(
-            f"[User Registered] {user.first_name} ({user.phone_number}) registered at ts: {current_ts}"
-        )
-
-        # Trigger WhatsApp message asynchronously so Google Apps Script doesn't block
-        bg_tasks.add_task(send_welcome_message, user.phone_number, user.first_name)
-    except Exception as e:
-        print(f"[Database Error] Could not register user: {e}")
-        return {"status": "error", "message": str(e)}
-    finally:
-        conn.close()
-
-    return {"status": "success", "message": f"Registered {user.first_name}"}
 
 
 # 3. Worker to download media, save to disk, record in DB, and reply
@@ -233,31 +153,76 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
                 caption = msg["image"].get("caption", "No caption")
                 bg_tasks.add_task(process_incoming_meal, media_id, sender, caption)
 
-            # Scenario B: Participant replied with text only
+            # Scenario B: Participant replied with text
             elif msg["type"] == "text":
                 text_body = msg["text"]["body"]
+                sender = msg["from"]
+                current_ts = int(datetime.now().timestamp())
+
                 conn = sqlite3.connect(DB_FILE)
                 c = conn.cursor()
-                c.execute(
-                    "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
-                    (sender, datetime.now(), text_body, "text_only"),
-                )
-                conn.commit()
-                conn.close()
-                print(f"[Text Log] Logged text meal from {sender}: {text_body}")
 
-                # Send brief text confirmation
-                ack_endpoint = (
-                    f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-                )
-                headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
-                payload = {
-                    "messaging_product": "whatsapp",
-                    "to": sender,
-                    "type": "text",
-                    "text": {"body": "Logged! 📝 Meal note recorded."},
-                }
-                requests.post(ack_endpoint, headers=headers, json=payload)
+                # --- THE ZERO-COST ONBOARDING TRIGGER ---
+                if "ready to start" in text_body.lower() or text_body.lower() == "hi":
+                    # 1. Register them in the database
+                    c.execute(
+                        """
+                        INSERT INTO users (phone_number, start_timestamp, status)
+                        VALUES (?, ?, 'active')
+                        ON CONFLICT(phone_number) DO NOTHING
+                    """,
+                        (sender, current_ts),
+                    )
+                    conn.commit()
+
+                    # 2. Send the Free Welcome Message
+                    welcome_body = (
+                        "Hey! 👋 Welcome to the 15-Day Energy Audit. You are officially in.\n\n"
+                        "For the next two weeks, this chat is your private, zero-judgment daily log. "
+                        "We just want to see how you naturally fuel your busy days.\n\n"
+                        "Your only task: Whenever you eat or drink *anything*, just snap a quick photo and send it right here. "
+                        "This includes your main meals, but just as importantly, we want to see the liquids that keep you going. "
+                        "Whether you grab a Gatorade at 11 AM, rely on a coffee to survive the 4 PM wall, or just sip on a traditional chaas, "
+                        "if you consume it, send a photo of it.\n\n"
+                        "To activate your log, snap a photo of your next meal, snack, or drink and send it over. Let’s get started! 📸"
+                    )
+
+                    ack_endpoint = (
+                        f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+                    )
+                    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                    payload = {
+                        "messaging_product": "whatsapp",
+                        "to": sender,
+                        "type": "text",
+                        "text": {"body": welcome_body},
+                    }
+                    requests.post(ack_endpoint, headers=headers, json=payload)
+                    print(
+                        f"[Onboarded] User {sender} successfully registered and welcomed!"
+                    )
+
+                # --- STANDARD TEXT MEAL LOGGING ---
+                else:
+                    c.execute(
+                        "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
+                        (sender, datetime.now(), text_body, "text_only"),
+                    )
+                    conn.commit()
+
+                    ack_endpoint = (
+                        f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+                    )
+                    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                    payload = {
+                        "messaging_product": "whatsapp",
+                        "to": sender,
+                        "type": "text",
+                        "text": {"body": "Logged! 📝 Meal note recorded."},
+                    }
+                    requests.post(ack_endpoint, headers=headers, json=payload)
+
+                conn.close()
 
     except Exception as err:
         print(f"\n[Parsing Error] The script failed here: {err}")
@@ -359,16 +324,16 @@ def start_scheduler():
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=15,
-        minute=30,
+        hour=16,
+        minute=15,
         misfire_grace_time=3600,
         args=["afternoon_nudge_1"],
     )
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=20,
-        minute=0,
+        hour=16,
+        minute=25,
         misfire_grace_time=3600,
         args=["evening_nudge_1"],
     )
