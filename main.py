@@ -22,21 +22,24 @@ from fastapi.staticfiles import StaticFiles
 def init_storage():
     target_dir = "/app/data"
     if os.path.exists(target_dir):
-        try:
-            test_file = os.path.join(target_dir, ".perm_test")
-            with open(test_file, "w") as f:
-                f.write("ok")
-            os.remove(test_file)
-            images_dir = os.path.join(target_dir, "images")
-            os.makedirs(images_dir, exist_ok=True)
-            db_path = os.path.join(target_dir, "test_study.db")
-            print(f"[Storage] Persistent volume is active. DB: {db_path}")
-            return target_dir, images_dir, db_path
-        except Exception as e:
-            print(f"[Storage] /app/data not writable ({e}).")
-            print("[Storage] Add RAILWAY_RUN_UID=0 in Railway Variables to enable persistent volume write permissions.")
-    
+        # Try candidate database names in case one already exists with bad permissions or as a directory
+        for db_name in ["study.db", "test_study.db"]:
+            db_path = os.path.join(target_dir, db_name)
+            if os.path.isdir(db_path):
+                db_path = os.path.join(db_path, "study.db")
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.execute("CREATE TABLE IF NOT EXISTS _test_check (id INTEGER PRIMARY KEY)")
+                conn.close()
+                images_dir = os.path.join(target_dir, "images")
+                os.makedirs(images_dir, exist_ok=True)
+                print(f"[Storage] Persistent volume active. Connected to SQLite: {db_path}")
+                return target_dir, images_dir, db_path
+            except Exception as e:
+                print(f"[Storage] Cannot use {db_path}: {e}")
+
     os.makedirs("images", exist_ok=True)
+    print("[Storage] Using local fallback: test_study.db")
     return ".", "images", "test_study.db"
 
 DATA_DIR, IMAGE_DIR, DB_FILE = init_storage()
