@@ -1,7 +1,6 @@
 import os
 import time
 
-os.makedirs("/app/data/images", exist_ok=True)
 import sqlite3
 from datetime import datetime, timedelta
 import requests
@@ -10,7 +9,6 @@ from fastapi import FastAPI, Request, Response, BackgroundTasks
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 
-
 load_dotenv()
 
 app = FastAPI(title="Dietary Study Bot")
@@ -18,7 +16,10 @@ app = FastAPI(title="Dietary Study Bot")
 ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
-DB_FILE = "test_study.db"
+
+DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
+os.makedirs(f"{DATA_DIR}/images", exist_ok=True)
+DB_FILE = os.path.join(DATA_DIR, "test_study.db")
 
 
 # 1. Initialize SQLite Database
@@ -77,9 +78,8 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             print(f"[Error] Failed to download image bytes: {img_response.status_code}")
             return
 
-        # Save to /images
-        os.makedirs("images", exist_ok=True)
-        filename = f"/app/data/images/{sender}_{int(datetime.now().timestamp())}.jpg"
+        # Save to images directory
+        filename = f"{DATA_DIR}/images/{sender}_{int(datetime.now().timestamp())}.jpg"
         with open(filename, "wb") as f:
             f.write(img_response.content)
 
@@ -262,6 +262,11 @@ def run_fixed_reminders(template_name):
     users = c.fetchall()
     conn.close()
 
+    print(f"[Scheduler] Found {len(users)} active user(s) in DB ({DB_FILE}).")
+    if not users:
+        print(f"[Scheduler] No active users to send {template_name} to.")
+        return
+
     for (phone_number,) in users:
         push_template_message(phone_number, template_name)
         print(f" -> Sent fixed reminder to {phone_number}")
@@ -283,6 +288,8 @@ def run_conditional_nudges(hours_of_silence, template_name):
     )
     users_data = c.fetchall()
     conn.close()
+
+    print(f"[Scheduler] Found {len(users_data)} active user(s) to check.")
 
     now = datetime.now()
     silence_threshold = timedelta(hours=hours_of_silence)
@@ -325,7 +332,7 @@ def start_scheduler():
         run_fixed_reminders,
         "cron",
         hour=17,
-        minute=35,
+        minute=55,
         misfire_grace_time=3600,
         args=["afternoon_nudge_1"],
     )
