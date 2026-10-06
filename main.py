@@ -359,8 +359,8 @@ def start_scheduler():
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=13,
-        minute=20,
+        hour=15,
+        minute=30,
         misfire_grace_time=3600,
         args=["afternoon_nudge_1"],
     )
