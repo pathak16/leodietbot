@@ -175,11 +175,12 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
                     # 1. Register them in the database
                     c.execute(
                         """
-                        INSERT INTO users (phone_number, start_timestamp, status)
-                        VALUES (?, ?, 'active')
-                        ON CONFLICT(phone_number) DO NOTHING
+                        INSERT INTO users (phone_number, first_name, start_timestamp, status)
+                        VALUES (?, ?, ?, 'active')
+                        ON CONFLICT(phone_number) DO UPDATE SET
+                            first_name = excluded.first_name
                     """,
-                        (sender, current_ts),
+                        (sender, first_name, current_ts),
                     )
                     conn.commit()
 
@@ -238,7 +239,7 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
     return {"status": "success"}
 
 
-def push_template_message(phone_number, template_name, first_name):
+def push_template_message(phone_number, template_name, first_name="Friend"):
     endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
@@ -254,7 +255,7 @@ def push_template_message(phone_number, template_name, first_name):
             "components": [
                 {
                     "type": "body",
-                    "parameters": [{"type": "text", "text": first_name}],
+                    "parameters": [{"type": "text", "text": first_name or "Friend"}],
                 }
             ],
         },
@@ -280,7 +281,7 @@ def run_fixed_reminders(template_name):
     conn.close()
 
     for phone_number, first_name in users:
-        push_template_message(phone_number, first_name, template_name)
+        push_template_message(phone_number, template_name, first_name)
         print(f" -> Sent fixed reminder to {phone_number} ")
 
 
@@ -316,7 +317,7 @@ def run_conditional_nudges(hours_of_silence, template_name):
             last_activity = datetime.fromtimestamp(start_ts)
 
         if (now - last_activity) >= silence_threshold:
-            push_template_message(phone_number, first_name, template_name)
+            push_template_message(phone_number, template_name, first_name)
             print(f" -> Sent missed-meal nudge to {phone_number}")
 
 
@@ -350,7 +351,7 @@ def start_scheduler():
         run_fixed_reminders,
         "cron",
         hour=17,
-        minute=10,
+        minute=20,
         misfire_grace_time=3600,
         args=["evening_nudge_1"],
     )
