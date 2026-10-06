@@ -1,4 +1,6 @@
 import os
+
+os.makedirs("/app/data/images", exist_ok=True)
 import sqlite3
 from datetime import datetime
 import requests
@@ -157,7 +159,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
         # Save to /images
         os.makedirs("images", exist_ok=True)
-        filename = f"images/{sender}_{int(datetime.now().timestamp())}.jpg"
+        filename = f"/app/data/images/{sender}_{int(datetime.now().timestamp())}.jpg"
         with open(filename, "wb") as f:
             f.write(img_response.content)
 
@@ -374,13 +376,28 @@ def start_scheduler():
     # 2. The Conditional Nudges (11:00 AM, 3:00 PM, 10:00 PM)
     # Triggers exactly 2 hours later, passing '2' as the hours_of_silence argument
     scheduler.add_job(
-        run_conditional_nudges, "cron", hour=11, minute=0, args=[2, "missed_meal_nudge"]
+        run_conditional_nudges,
+        "cron",
+        hour=11,
+        minute=0,
+        misfire_grace_time=3600,
+        args=[2, "missed_meal_nudge"],
     )
     scheduler.add_job(
-        run_conditional_nudges, "cron", hour=15, minute=0, args=[2, "missed_meal_nudge"]
+        run_conditional_nudges,
+        "cron",
+        hour=15,
+        minute=15,
+        misfire_grace_time=3600,
+        args=[2, "missed_meal_nudge"],
     )
     scheduler.add_job(
-        run_conditional_nudges, "cron", hour=22, minute=0, args=[2, "missed_meal_nudge"]
+        run_conditional_nudges,
+        "cron",
+        hour=22,
+        minute=0,
+        misfire_grace_time=3600,
+        args=[2, "missed_meal_nudge"],
     )
 
     scheduler.start()
