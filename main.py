@@ -29,6 +29,70 @@ HARDCODED_NUDGES = {
 }
 
 
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+def view_dashboard():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # 1. Fetch Users
+    c.execute(
+        "SELECT phone_number, start_timestamp, status FROM users ORDER BY start_timestamp DESC"
+    )
+    users = c.fetchall()
+
+    # 2. Fetch Meal Logs
+    c.execute(
+        "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC"
+    )
+    logs = c.fetchall()
+    conn.close()
+
+    # Build HTML Table
+    html = """
+    <html>
+    <head>
+        <title>Dietary Study Logs</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; }
+            h2 { margin-top: 32px; color: #1e293b; }
+            table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+            th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+            th { background: #0f172a; color: white; }
+            img { border-radius: 6px; object-fit: cover; }
+            .badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
+            .badge-active { background: #dcfce7; color: #15803d; }
+        </style>
+    </head>
+    <body>
+        <h2>Registered Participants</h2>
+        <table>
+            <tr><th>Phone Number</th><th>Registered At</th><th>Status</th></tr>
+    """
+    for phone, start_ts, status in users:
+        readable_time = (
+            datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S")
+            if start_ts
+            else "N/A"
+        )
+        html += f"<tr><td>{phone}</td><td>{readable_time}</td><td><span class='badge badge-active'>{status}</span></td></tr>"
+
+    html += """
+        </table>
+        <h2>Logged Meals & Drinks</h2>
+        <table>
+            <tr><th>Phone Number</th><th>Timestamp</th><th>Note / Caption</th><th>Photo</th></tr>
+    """
+    for phone, ts, caption, img_path in logs:
+        img_tag = "Text Only"
+        if img_path and img_path != "text_only":
+            img_filename = os.path.basename(img_path)
+            img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
+        html += f"<tr><td>{phone}</td><td>{ts}</td><td>{caption}</td><td>{img_tag}</td></tr>"
+
+    html += "</table></body></html>"
+    return html
+
+
 def init_storage():
     target_dir = "/app/data"
     if os.path.exists(target_dir):
@@ -435,7 +499,7 @@ def start_scheduler():
         run_fixed_reminders,
         "cron",
         hour=10,
-        minute=17,
+        minute=30,
         misfire_grace_time=3600,
         args=["morning_nudge_1"],
     )
@@ -443,7 +507,7 @@ def start_scheduler():
         run_fixed_reminders,
         "cron",
         hour=10,
-        minute=20,
+        minute=35,
         misfire_grace_time=3600,
         args=["afternoon_nudge_1"],
     )
@@ -451,7 +515,7 @@ def start_scheduler():
         run_fixed_reminders,
         "cron",
         hour=10,
-        minute=25,
+        minute=40,
         misfire_grace_time=3600,
         args=["evening_nudge_1"],
     )
