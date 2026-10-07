@@ -19,6 +19,16 @@ VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+HARDCODED_NUDGES = {
+    "breakfast_nudge_1": "Good Morning!☀️ Whenever you get a breather, drop a quick photo of your breakfast. Waiting! ",
+    "breakfast_nudge_2": "Starving has never lead to better work 😒 Go grab something to eat and show us proof!",
+    "lunch_nudge_1": "What's for lunch today?",
+    "lunch_nudge_2": "I know being behind on work is bad. But know what's worse? Acidity.",
+    "dinner_nudge_1": "What's for dinner?",
+    "dinner_nudge_2": "If it's taking this long, it has to be something yummy. How dare you hide!?",
+}
+
+
 def init_storage():
     target_dir = "/app/data"
     if os.path.exists(target_dir):
@@ -29,11 +39,15 @@ def init_storage():
                 db_path = os.path.join(db_path, "study.db")
             try:
                 conn = sqlite3.connect(db_path)
-                conn.execute("CREATE TABLE IF NOT EXISTS _test_check (id INTEGER PRIMARY KEY)")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS _test_check (id INTEGER PRIMARY KEY)"
+                )
                 conn.close()
                 images_dir = os.path.join(target_dir, "images")
                 os.makedirs(images_dir, exist_ok=True)
-                print(f"[Storage] Persistent volume active. Connected to SQLite: {db_path}")
+                print(
+                    f"[Storage] Persistent volume active. Connected to SQLite: {db_path}"
+                )
                 return target_dir, images_dir, db_path
             except Exception as e:
                 print(f"[Storage] Cannot use {db_path}: {e}")
@@ -41,6 +55,7 @@ def init_storage():
     os.makedirs("images", exist_ok=True)
     print("[Storage] Using local fallback: test_study.db")
     return ".", "images", "test_study.db"
+
 
 DATA_DIR, IMAGE_DIR, DB_FILE = init_storage()
 app.mount("/view-images", StaticFiles(directory=IMAGE_DIR), name="images")
@@ -139,16 +154,22 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 async def view_users():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT phone_number, start_timestamp, status FROM users ORDER BY start_timestamp DESC")
+    c.execute(
+        "SELECT phone_number, start_timestamp, status FROM users ORDER BY start_timestamp DESC"
+    )
     rows = c.fetchall()
     conn.close()
 
     html = "<html><head><title>Participants</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;max-width:600px;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}</style></head><body>"
     html += f"<h2>Registered Participants ({len(rows)})</h2>"
     html += "<p><a href='/admin/meals'>View Logged Meals &amp; Photos &rarr;</a></p>"
-    html += "<table><tr><th>Phone Number</th><th>Registration Time</th><th>Status</th></tr>"
+    html += (
+        "<table><tr><th>Phone Number</th><th>Registration Time</th><th>Status</th></tr>"
+    )
     for phone, ts, status in rows:
-        time_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+        time_str = (
+            datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+        )
         html += f"<tr><td>{phone}</td><td>{time_str}</td><td>{status}</td></tr>"
     html += "</table></body></html>"
     return html
@@ -158,14 +179,18 @@ async def view_users():
 async def view_meals():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC")
+    c.execute(
+        "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC"
+    )
     rows = c.fetchall()
     conn.close()
 
     html = "<html><head><title>Logged Meals</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}img{max-width:120px;border-radius:4px;}</style></head><body>"
     html += f"<h2>Logged Meals ({len(rows)})</h2>"
     html += "<p><a href='/admin/users'>&larr; View Participants</a></p>"
-    html += "<table><tr><th>Phone</th><th>Timestamp</th><th>Caption</th><th>Image</th></tr>"
+    html += (
+        "<table><tr><th>Phone</th><th>Timestamp</th><th>Caption</th><th>Image</th></tr>"
+    )
     for phone, ts, caption, img_path in rows:
         img_html = "Text only"
         if img_path and img_path != "text_only":
@@ -297,8 +322,7 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
 
     return {"status": "success"}
 
-
-def push_template_message(phone_number, template_name):
+    # def push_template_message(phone_number, template_name):
     endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
@@ -321,9 +345,28 @@ def push_template_message(phone_number, template_name):
         print(f"[API Error] Failed to send {template_name} to {phone_number}: {e}")
 
 
-def run_fixed_reminders(template_name):
+def push_text_nudge(phone_number, nudge_key):
+    raw_text = HARDCODED_NUDGES.get(nudge_key, "Just checking in on your meals!")
+
+    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "text",
+        "text": {"body": raw_text},
+    }
+
+    res = requests.post(endpoint, headers=headers, json=payload)
+    if res.status_code == 200:
+        print(f"[Success] Sent raw text nudge ({nudge_key}) to {phone_number}")
+    else:
+        print(f"[API Error] Meta rejected nudge to {phone_number}: {res.text}")
+
+
+def run_fixed_reminders(nudge_key):
     """Fires at exact times regardless of user activity."""
-    print(f"[Scheduler] Executing fixed blast: {template_name}")
+    print(f"[Scheduler] Executing fixed blast: {nudge_key}")
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT phone_number FROM users WHERE status = 'active'")
@@ -332,15 +375,15 @@ def run_fixed_reminders(template_name):
 
     print(f"[Scheduler] Found {len(users)} active user(s) in DB ({DB_FILE}).")
     if not users:
-        print(f"[Scheduler] No active users to send {template_name} to.")
+        print(f"[Scheduler] No active users to send {nudge_key} to.")
         return
 
     for (phone_number,) in users:
-        push_template_message(phone_number, template_name)
+        push_text_nudge(phone_number, nudge_key)
         print(f" -> Sent fixed reminder to {phone_number}")
 
 
-def run_conditional_nudges(hours_of_silence, template_name):
+def run_conditional_nudges(hours_of_silence, nudge_key):
     """Checks DB and only fires if the user has been silent for X hours."""
     print(f"[Scheduler] Checking for users silent for {hours_of_silence} hours...")
     conn = sqlite3.connect(DB_FILE)
@@ -374,7 +417,7 @@ def run_conditional_nudges(hours_of_silence, template_name):
             last_activity = datetime.fromtimestamp(start_ts)
 
         if (now - last_activity) >= silence_threshold:
-            push_template_message(phone_number, template_name)
+            push_text_nudge(phone_number, nudge_key)
             print(f" -> Sent missed-meal nudge to {phone_number}")
 
 
@@ -391,24 +434,24 @@ def start_scheduler():
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=9,
-        minute=0,
+        hour=10,
+        minute=17,
         misfire_grace_time=3600,
         args=["morning_nudge_1"],
     )
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=19,
-        minute=00,
+        hour=10,
+        minute=20,
         misfire_grace_time=3600,
         args=["afternoon_nudge_1"],
     )
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=17,
-        minute=20,
+        hour=10,
+        minute=25,
         misfire_grace_time=3600,
         args=["evening_nudge_1"],
     )
@@ -421,7 +464,7 @@ def start_scheduler():
         hour=11,
         minute=0,
         misfire_grace_time=3600,
-        args=[2, "missed_meal_nudge"],
+        args=[2, "breakfast_nudge_2"],
     )
     scheduler.add_job(
         run_conditional_nudges,
@@ -429,7 +472,7 @@ def start_scheduler():
         hour=15,
         minute=15,
         misfire_grace_time=3600,
-        args=[2, "missed_meal_nudge"],
+        args=[2, "lunch_nudge_2"],
     )
     scheduler.add_job(
         run_conditional_nudges,
@@ -437,7 +480,7 @@ def start_scheduler():
         hour=22,
         minute=0,
         misfire_grace_time=3600,
-        args=[2, "missed_meal_nudge"],
+        args=[2, "dinner_nudge_2"],
     )
 
     scheduler.start()
