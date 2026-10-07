@@ -334,14 +334,9 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
 
                     # 2. Send the Free Welcome Message
                     welcome_body = (
-                        "Hey! 👋 Welcome to the 15-Day Energy Audit. You are officially in.\n\n"
-                        "For the next two weeks, this chat is your private, zero-judgment daily log. "
-                        "We just want to see how you naturally fuel your busy days.\n\n"
-                        "Your only task: Whenever you eat or drink *anything*, just snap a quick photo and send it right here. "
-                        "This includes your main meals, but just as importantly, we want to see the liquids that keep you going. "
-                        "Whether you grab a Gatorade at 11 AM, rely on a coffee to survive the 4 PM wall, or just sip on a traditional chaas, "
-                        "if you consume it, send a photo of it.\n\n"
-                        "To activate your log, snap a photo of your next meal, snack, or drink and send it over. Let’s get started! 📸"
+                        "Helloooo! Yayy, you are officially in! \n\n"
+                        "You know what to do. For the next 15 days, whenever you eat or drink *anything*, just snap a quick photo and send it right here. "
+                        "Let’s get starteddd!"
                     )
 
                     ack_endpoint = (
@@ -499,25 +494,25 @@ def start_scheduler():
         run_fixed_reminders,
         "cron",
         hour=10,
-        minute=30,
+        minute=45,
         misfire_grace_time=3600,
-        args=["morning_nudge_1"],
+        args=["breakfast_nudge_1"],
     )
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
         hour=10,
-        minute=35,
+        minute=47,
         misfire_grace_time=3600,
-        args=["afternoon_nudge_1"],
+        args=["lunch_nudge_1"],
     )
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
         hour=10,
-        minute=40,
+        minute=50,
         misfire_grace_time=3600,
-        args=["evening_nudge_1"],
+        args=["dinner_nudge_1"],
     )
 
     # 2. The Conditional Nudges (11:00 AM, 3:00 PM, 10:00 PM)
