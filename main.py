@@ -493,24 +493,24 @@ def start_scheduler():
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=10,
-        minute=45,
+        hour=9,
+        minute=0,
         misfire_grace_time=3600,
         args=["breakfast_nudge_1"],
     )
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=10,
-        minute=47,
+        hour=12,
+        minute=30,
         misfire_grace_time=3600,
         args=["lunch_nudge_1"],
     )
     scheduler.add_job(
         run_fixed_reminders,
         "cron",
-        hour=10,
-        minute=50,
+        hour=8,
+        minute=0,
         misfire_grace_time=3600,
         args=["dinner_nudge_1"],
     )
@@ -528,8 +528,8 @@ def start_scheduler():
     scheduler.add_job(
         run_conditional_nudges,
         "cron",
-        hour=15,
-        minute=15,
+        hour=14,
+        minute=30,
         misfire_grace_time=3600,
         args=[2, "lunch_nudge_2"],
     )
