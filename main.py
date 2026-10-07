@@ -502,7 +502,7 @@ def start_scheduler():
         run_fixed_reminders,
         "cron",
         hour=12,
-        minute=30,
+        minute=45,
         misfire_grace_time=3600,
         args=["lunch_nudge_1"],
     )
