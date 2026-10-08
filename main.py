@@ -8,8 +8,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
 
 load_dotenv()
 
