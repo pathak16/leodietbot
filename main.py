@@ -1,6 +1,6 @@
 import os
 import time
-
+from analyzer import run_gemini_vision_pipeline
 import sqlite3
 from datetime import datetime, timedelta
 import requests
@@ -154,6 +154,30 @@ def init_db():
     """
     )
 
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS meal_nutrition (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meal_log_id INTEGER,
+    phone_number TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    identified_items TEXT,              -- JSON string list of items
+    meal_type TEXT,
+    food_source_type TEXT,
+    staple_format TEXT,
+    protein_grams REAL,
+    carbs_grams REAL,
+    fat_grams REAL,
+    fiber_grams REAL,
+    protein_source_present BOOLEAN,
+    protein_source_type TEXT,
+    is_caffeine_or_sugar_crutch BOOLEAN,
+    primary_fuel_source TEXT,
+    crash_risk_level TEXT,
+    raw_json TEXT
+    )
+    """
+    )
+
     conn.commit()
     conn.close()
 
@@ -211,6 +235,50 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
+
+    # 4. Real-time Gemini Processing Pipeline
+    try:
+        print(f"[Gemini] Analyzing image for meal #{meal_log_id} ({sender})...")
+        analysis = run_gemini_vision_pipeline(filename, caption)
+
+        c.execute(
+            """
+                INSERT INTO meal_nutrition (
+                    meal_log_id, phone_number, identified_items, meal_type,
+                    food_source_type, staple_format, protein_grams, carbs_grams,
+                    fat_grams, fiber_grams, protein_source_present, protein_source_type,
+                    is_caffeine_or_sugar_crutch, primary_fuel_source, crash_risk_level, raw_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                meal_log_id,
+                sender,
+                json.dumps(analysis.get("identified_items", [])),
+                analysis.get("meal_type"),
+                analysis.get("food_source_type"),
+                analysis.get("staple_format"),
+                analysis.get("estimated_protein_grams", 0.0),
+                analysis.get("estimated_carbs_grams", 0.0),
+                analysis.get("estimated_fat_grams", 0.0),
+                analysis.get("estimated_fiber_grams", 0.0),
+                analysis.get("protein_source_present", False),
+                analysis.get("protein_source_type"),
+                analysis.get("is_caffeine_or_sugar_crutch", False),
+                analysis.get("primary_fuel_source"),
+                analysis.get("crash_risk_level"),
+                json.dumps(analysis),
+            ),
+        )
+        conn.commit()
+        print(
+            f"[Gemini] Success: {analysis.get('identified_items')} | Protein:"
+            f" {analysis.get('estimated_protein_grams')}g | Fuel:"
+            f" {analysis.get('primary_fuel_source')}"
+        )
+    except Exception as e:
+        print(f"[Gemini Error] Processing failed for meal #{meal_log_id}: {e}")
+    finally:
+        conn.close()
 
 
 # Admin Viewers to easily see users and meals in browser
@@ -307,8 +375,27 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
             # Scenario A: Participant sent an image
             if msg["type"] == "image":
                 media_id = msg["image"]["id"]
-                caption = msg["image"].get("caption", "No caption")
-                bg_tasks.add_task(process_incoming_meal, media_id, sender, caption)
+                caption = msg["image"].get("caption", "").strip()
+
+                if caption:
+                    bg_tasks.add_task(process_incoming_meal, media_id, sender, caption)
+
+                else:
+                    # No caption -> reject the log and ask for one
+                    ack_endpoint = (
+                        f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+                    )
+                    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
+                    payload = {
+                        "messaging_product": "whatsapp",
+                        "to": sender,
+                        "type": "text",
+                        "text": {
+                            "body": "Oops! We need a quick description to log this meal. 📸 Please send the photo again and type what it is in the caption!"
+                        },
+                    }
+                    requests.post(ack_endpoint, headers=headers, json=payload)
+                    print(f"[Rejected] Image from {sender} had no caption.")
 
             # Scenario B: Participant replied with text
             elif msg["type"] == "text":
