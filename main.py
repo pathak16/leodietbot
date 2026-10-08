@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 load_dotenv()
 
@@ -27,6 +29,8 @@ HARDCODED_NUDGES = {
     "dinner_nudge_1": "What's for dinner?",
     "dinner_nudge_2": "If it's taking this long, it has to be something yummy. How dare you hide!?",
 }
+
+app.mount("/app/data/images", StaticFiles(directory="/app/data/images"), name="images")
 
 
 @app.get("/admin/dashboard", response_class=HTMLResponse)
