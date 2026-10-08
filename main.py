@@ -1,6 +1,6 @@
 import os
 import time
-from analyzer import run_gemini_vision_pipeline
+from analysis import run_gemini_vision_pipeline
 import sqlite3
 from datetime import datetime, timedelta
 import requests
