@@ -181,155 +181,155 @@ def view_dashboard():
     """
 
 
-@app.get("/admin/meal/{meal_id}", response_class=HTMLResponse)
-def meal_detail_page(meal_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+# @app.get("/admin/meal/{meal_id}", response_class=HTMLResponse)
+# def meal_detail_page(meal_id: int):
+#     conn = sqlite3.connect(DB_FILE)
+#     conn.row_factory = sqlite3.Row
+#     c = conn.cursor()
 
-    query = """
-    SELECT 
-        l.id, l.phone_number, l.timestamp, l.caption, l.image_path,
-        n.identified_items, n.meal_type, n.food_source_type, n.staple_format,
-        n.protein_grams, n.carbs_grams, n.fat_grams, n.fiber_grams,
-        n.protein_source_present, n.protein_source_type,
-        n.primary_fuel_source, n.crash_risk_level, n.is_caffeine_or_sugar_crutch,
-        n.raw_json
-    FROM test_meal_logs l
-    LEFT JOIN meal_nutrition n ON l.id = n.meal_log_id
-    WHERE l.id = ?
-    """
-    c.execute(query, (meal_id,))
-    row = c.fetchone()
-    conn.close()
+#     query = """
+#     SELECT
+#         l.id, l.phone_number, l.timestamp, l.caption, l.image_path,
+#         n.identified_items, n.meal_type, n.food_source_type, n.staple_format,
+#         n.protein_grams, n.carbs_grams, n.fat_grams, n.fiber_grams,
+#         n.protein_source_present, n.protein_source_type,
+#         n.primary_fuel_source, n.crash_risk_level, n.is_caffeine_or_sugar_crutch,
+#         n.raw_json
+#     FROM test_meal_logs l
+#     LEFT JOIN meal_nutrition n ON l.id = n.meal_log_id
+#     WHERE l.id = ?
+#     """
+#     c.execute(query, (meal_id,))
+#     row = c.fetchone()
+#     conn.close()
 
-    if not row:
-        raise HTTPException(status_code=404, detail="Meal log not found")
+#     if not row:
+#         raise HTTPException(status_code=404, detail="Meal log not found")
 
-    # Format items list
-    items_list = []
-    if row["identified_items"]:
-        try:
-            items_list = json.loads(row["identified_items"])
-        except Exception:
-            items_list = [row["identified_items"]]
+#     # Format items list
+#     items_list = []
+#     if row["identified_items"]:
+#         try:
+#             items_list = json.loads(row["identified_items"])
+#         except Exception:
+#             items_list = [row["identified_items"]]
 
-    items_chips = "".join(
-        [
-            (
-                f'<span style="display: inline-block; background: #e2e8f0; color:'
-                " #1e293b; padding: 4px 10px; border-radius: 999px; margin-right:"
-                f' 6px; font-size: 13px; font-weight: 500;">{item}</span>'
-            )
-            for item in items_list
-        ]
-    )
+#     items_chips = "".join(
+#         [
+#             (
+#                 f'<span style="display: inline-block; background: #e2e8f0; color:'
+#                 " #1e293b; padding: 4px 10px; border-radius: 999px; margin-right:"
+#                 f' 6px; font-size: 13px; font-weight: 500;">{item}</span>'
+#             )
+#             for item in items_list
+#         ]
+#     )
 
-    # Risk coloring
-    risk = row["crash_risk_level"] or "N/A"
-    risk_color = (
-        "#ef4444" if risk == "High" else ("#f59e0b" if risk == "Medium" else "#10b981")
-    )
+#     # Risk coloring
+#     risk = row["crash_risk_level"] or "N/A"
+#     risk_color = (
+#         "#ef4444" if risk == "High" else ("#f59e0b" if risk == "Medium" else "#10b981")
+#     )
 
-    # Pretty format raw JSON for inspection
-    formatted_json = "-"
-    if row["raw_json"]:
-        try:
-            formatted_json = json.dumps(json.loads(row["raw_json"]), indent=2)
-        except Exception:
-            formatted_json = row["raw_json"]
+#     # Pretty format raw JSON for inspection
+#     formatted_json = "-"
+#     if row["raw_json"]:
+#         try:
+#             formatted_json = json.dumps(json.loads(row["raw_json"]), indent=2)
+#         except Exception:
+#             formatted_json = row["raw_json"]
 
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Meal #{row['id']} Details</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; margin: 0; padding: 24px; color: #0f172a; }}
-            .container {{ max-width: 900px; margin: auto; background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); overflow: hidden; }}
-            .header {{ padding: 18px 24px; background: #0f172a; color: white; display: flex; justify-content: space-between; align-items: center; }}
-            .content {{ display: flex; flex-wrap: wrap; gap: 24px; padding: 24px; }}
-            .col-left {{ flex: 1; min-width: 280px; }}
-            .col-right {{ flex: 1.5; min-width: 320px; }}
-            .img-box {{ width: 100%; max-height: 420px; object-fit: contain; background: #000; border-radius: 8px; }}
-            .metric-card {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
-            .grid-4 {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; text-align: center; }}
-            .badge {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }}
-            pre {{ background: #1e293b; color: #f8fafc; padding: 12px; border-radius: 6px; font-size: 11px; overflow-x: auto; max-height: 200px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <div>
-                    <a href="/admin/dashboard" style="color: #94a3b8; text-decoration: none; font-size: 13px;">&larr; Back to Dashboard</a>
-                    <h2 style="margin: 4px 0 0 0; font-size: 18px;">Meal #{row['id']} — Participant {row['phone_number']}</h2>
-                </div>
-                <span style="font-size: 12px; color: #94a3b8;">{str(row['timestamp'])[:19]}</span>
-            </div>
+#     return f"""
+#     <!DOCTYPE html>
+#     <html>
+#     <head>
+#         <title>Meal #{row['id']} Details</title>
+#         <meta name="viewport" content="width=device-width, initial-scale=1">
+#         <style>
+#             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; margin: 0; padding: 24px; color: #0f172a; }}
+#             .container {{ max-width: 900px; margin: auto; background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); overflow: hidden; }}
+#             .header {{ padding: 18px 24px; background: #0f172a; color: white; display: flex; justify-content: space-between; align-items: center; }}
+#             .content {{ display: flex; flex-wrap: wrap; gap: 24px; padding: 24px; }}
+#             .col-left {{ flex: 1; min-width: 280px; }}
+#             .col-right {{ flex: 1.5; min-width: 320px; }}
+#             .img-box {{ width: 100%; max-height: 420px; object-fit: contain; background: #000; border-radius: 8px; }}
+#             .metric-card {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
+#             .grid-4 {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; text-align: center; }}
+#             .badge {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }}
+#             pre {{ background: #1e293b; color: #f8fafc; padding: 12px; border-radius: 6px; font-size: 11px; overflow-x: auto; max-height: 200px; }}
+#         </style>
+#     </head>
+#     <body>
+#         <div class="container">
+#             <div class="header">
+#                 <div>
+#                     <a href="/admin/dashboard" style="color: #94a3b8; text-decoration: none; font-size: 13px;">&larr; Back to Dashboard</a>
+#                     <h2 style="margin: 4px 0 0 0; font-size: 18px;">Meal #{row['id']} — Participant {row['phone_number']}</h2>
+#                 </div>
+#                 <span style="font-size: 12px; color: #94a3b8;">{str(row['timestamp'])[:19]}</span>
+#             </div>
 
-            <div class="content">
-                <!-- Left: Photo & Raw Caption -->
-                <div class="col-left">
-                    <img src="/{row['image_path']}" class="img-box" onerror="this.src='https://placehold.co/400x300?text=No+Photo'">
-                    <div style="margin-top: 14px;">
-                        <span style="font-size: 12px; color: #64748b; font-weight: 600;">USER CAPTION</span>
-                        <p style="margin: 4px 0; font-size: 14px; font-style: italic;">"{row['caption'] or 'No caption provided'}"</p>
-                    </div>
-                </div>
+#             <div class="content">
+#                 <!-- Left: Photo & Raw Caption -->
+#                 <div class="col-left">
+#                     <img src="/{row['image_path']}" class="img-box" onerror="this.src='https://placehold.co/400x300?text=No+Photo'">
+#                     <div style="margin-top: 14px;">
+#                         <span style="font-size: 12px; color: #64748b; font-weight: 600;">USER CAPTION</span>
+#                         <p style="margin: 4px 0; font-size: 14px; font-style: italic;">"{row['caption'] or 'No caption provided'}"</p>
+#                     </div>
+#                 </div>
 
-                <!-- Right: Nutrition Breakdown & Behavioral Drivers -->
-                <div class="col-right">
-                    <div class="metric-card">
-                        <span style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase;">Identified Foods</span>
-                        <div style="margin-top: 8px;">{items_chips or 'None identified'}</div>
-                    </div>
+#                 <!-- Right: Nutrition Breakdown & Behavioral Drivers -->
+#                 <div class="col-right">
+#                     <div class="metric-card">
+#                         <span style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase;">Identified Foods</span>
+#                         <div style="margin-top: 8px;">{items_chips or 'None identified'}</div>
+#                     </div>
 
-                    <div class="metric-card">
-                        <span style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase;">Nutritional Breakdown (Estimated)</span>
-                        <div class="grid-4">
-                            <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
-                                <div style="font-size: 11px; color: #64748b;">Protein</div>
-                                <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['protein_grams'] or 0}g</div>
-                            </div>
-                            <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
-                                <div style="font-size: 11px; color: #64748b;">Carbs</div>
-                                <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['carbs_grams'] or 0}g</div>
-                            </div>
-                            <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
-                                <div style="font-size: 11px; color: #64748b;">Fat</div>
-                                <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['fat_grams'] or 0}g</div>
-                            </div>
-                            <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
-                                <div style="font-size: 11px; color: #64748b;">Fiber</div>
-                                <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['fiber_grams'] or 0}g</div>
-                            </div>
-                        </div>
-                    </div>
+#                     <div class="metric-card">
+#                         <span style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase;">Nutritional Breakdown (Estimated)</span>
+#                         <div class="grid-4">
+#                             <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
+#                                 <div style="font-size: 11px; color: #64748b;">Protein</div>
+#                                 <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['protein_grams'] or 0}g</div>
+#                             </div>
+#                             <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
+#                                 <div style="font-size: 11px; color: #64748b;">Carbs</div>
+#                                 <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['carbs_grams'] or 0}g</div>
+#                             </div>
+#                             <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
+#                                 <div style="font-size: 11px; color: #64748b;">Fat</div>
+#                                 <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['fat_grams'] or 0}g</div>
+#                             </div>
+#                             <div style="background: white; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px;">
+#                                 <div style="font-size: 11px; color: #64748b;">Fiber</div>
+#                                 <div style="font-size: 18px; font-weight: bold; color: #0f172a;">{row['fiber_grams'] or 0}g</div>
+#                             </div>
+#                         </div>
+#                     </div>
 
-                    <div class="metric-card">
-                        <span style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase;">Study Insights & Behavioral Markers</span>
-                        <div style="margin-top: 10px; font-size: 13px; line-height: 1.8;">
-                            <div><b>Meal Category:</b> {row['meal_type'] or 'N/A'} ({row['food_source_type'] or 'N/A'})</div>
-                            <div><b>Staple Format:</b> <span class="badge" style="background: #e2e8f0;">{row['staple_format'] or 'N/A'}</span></div>
-                            <div><b>Fuel Classification:</b> <span class="badge" style="background: #dbeafe; color: #1e40af;">{row['primary_fuel_source'] or 'N/A'}</span></div>
-                            <div><b>Glycemic Crash Risk:</b> <span class="badge" style="background: {risk_color}22; color: {risk_color};">{risk}</span></div>
-                            <div><b>Sugar / Stimulant Crutch:</b> {'🚨 Yes' if row['is_caffeine_or_sugar_crutch'] else 'No'}</div>
-                            <div><b>Protein Source Anchor:</b> {row['protein_source_type'] or 'None'}</div>
-                        </div>
-                    </div>
+#                     <div class="metric-card">
+#                         <span style="font-size: 11px; color: #64748b; font-weight: 700; text-transform: uppercase;">Study Insights & Behavioral Markers</span>
+#                         <div style="margin-top: 10px; font-size: 13px; line-height: 1.8;">
+#                             <div><b>Meal Category:</b> {row['meal_type'] or 'N/A'} ({row['food_source_type'] or 'N/A'})</div>
+#                             <div><b>Staple Format:</b> <span class="badge" style="background: #e2e8f0;">{row['staple_format'] or 'N/A'}</span></div>
+#                             <div><b>Fuel Classification:</b> <span class="badge" style="background: #dbeafe; color: #1e40af;">{row['primary_fuel_source'] or 'N/A'}</span></div>
+#                             <div><b>Glycemic Crash Risk:</b> <span class="badge" style="background: {risk_color}22; color: {risk_color};">{risk}</span></div>
+#                             <div><b>Sugar / Stimulant Crutch:</b> {'🚨 Yes' if row['is_caffeine_or_sugar_crutch'] else 'No'}</div>
+#                             <div><b>Protein Source Anchor:</b> {row['protein_source_type'] or 'None'}</div>
+#                         </div>
+#                     </div>
 
-                    <details style="font-size: 12px; color: #64748b; margin-top: 10px;">
-                        <summary style="cursor: pointer; font-weight: 600;">View Raw Gemini JSON Output</summary>
-                        <pre>{formatted_json}</pre>
-                    </details>
-                </div>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+#                     <details style="font-size: 12px; color: #64748b; margin-top: 10px;">
+#                         <summary style="cursor: pointer; font-weight: 600;">View Raw Gemini JSON Output</summary>
+#                         <pre>{formatted_json}</pre>
+#                     </details>
+#                 </div>
+#             </div>
+#         </div>
+#     </body>
+#     </html>
+#     """
 
 
 def init_storage():
