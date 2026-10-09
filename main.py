@@ -126,6 +126,41 @@ DATA_DIR, IMAGE_DIR, DB_FILE = init_storage()
 app.mount("/view-images", StaticFiles(directory=IMAGE_DIR), name="images")
 
 
+@app.get("/admin/json-logs", response_class=HTMLResponse)
+def view_json_logs():
+    image_dir = "/app/data/images/"
+    if not os.path.exists(image_dir):
+        return "<h3>No data directory found yet. Send a photo first!</h3>"
+
+    # Find all files ending in _analysis.json
+    files = [f for f in os.listdir(image_dir) if f.endswith("_analysis.json")]
+
+    if not files:
+        return "<h3>No JSON files found yet. Send a photo first!</h3>"
+
+    html = "<html><body style='font-family: sans-serif; padding: 20px;'><h2>Raw Gemini JSON Logs</h2><div style='display:flex; flex-wrap:wrap; gap: 20px;'>"
+
+    for filename in sorted(files, reverse=True):  # Newest first
+        filepath = os.path.join(image_dir, filename)
+        try:
+            with open(filepath, "r") as f:
+                data = json.load(f)
+
+            # Pretty print the JSON inside a card
+            pretty_json = json.dumps(data, indent=2)
+            html += f"""
+            <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; width: 400px; background: #f9f9f9;">
+                <h4 style="margin-top: 0; color: #333;">{filename}</h4>
+                <pre style="font-size: 11px; white-space: pre-wrap; word-wrap: break-word;">{pretty_json}</pre>
+            </div>
+            """
+        except Exception as e:
+            html += f"<p>Error reading {filename}: {e}</p>"
+
+    html += "</div></body></html>"
+    return html
+
+
 # 1. Initialize SQLite Database
 def init_db():
     conn = sqlite3.connect(DB_FILE)
