@@ -29,7 +29,7 @@ class MacroAnalysis(typing.TypedDict):
 
 def run_gemini_vision_pipeline(image_path: str, caption: str = "") -> dict:
     """Sends the local image to Gemini 1.5 Flash and returns parsed JSON."""
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
     # Upload temporary image to Google API
     uploaded_file = genai.upload_file(path=image_path)
