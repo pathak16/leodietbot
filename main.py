@@ -1,4 +1,5 @@
 import os
+import json
 import time
 from analysis import run_gemini_vision_pipeline
 import sqlite3
@@ -211,6 +212,25 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         )
         with open(filename, "wb") as f:
             f.write(img_response.content)
+
+        # --- GEMINI PROCESSING TEST ---
+        print(f"[Test] Sending {filename} to Gemini...")
+        try:
+            # Run the analysis
+            gemini_output = run_gemini_vision_pipeline(filename, caption)
+
+            # 1. Print directly to Railway Logs so you can see it live
+            print(
+                f"--- GEMINI ANALYSIS SUCCESS ---\n{json.dumps(gemini_output, indent=2)}"
+            )
+
+            # 2. Save to a local JSON file in your persistent volume
+            output_filepath = f"{filename}_analysis.json"
+            with open(output_filepath, "w") as json_file:
+                json.dump(gemini_output, json_file, indent=2)
+
+        except Exception as e:
+            print(f"--- GEMINI PROCESSING FAILED ---\n{e}")
 
         # C. Insert into SQLite
         conn = sqlite3.connect(DB_FILE)
