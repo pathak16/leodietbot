@@ -213,6 +213,16 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         with open(filename, "wb") as f:
             f.write(img_response.content)
 
+        # D. Send WhatsApp confirmation reply
+        ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": sender,
+            "type": "text",
+            "text": {"body": "Logged! 📸 Meal recorded."},
+        }
+        requests.post(ack_endpoint, headers=headers, json=payload)
+
         # --- GEMINI PROCESSING TEST ---
         print(f"[Test] Sending {filename} to Gemini...")
         try:
@@ -242,16 +252,6 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         conn.commit()
         conn.close()
         print(f"[Success] Saved meal from {sender} -> {filename}")
-
-        # D. Send WhatsApp confirmation reply
-        ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": sender,
-            "type": "text",
-            "text": {"body": "Logged! 📸 Meal recorded."},
-        }
-        requests.post(ack_endpoint, headers=headers, json=payload)
 
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
