@@ -258,7 +258,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
     # 4. Real-time Gemini Processing Pipeline
     try:
-        print(f"[Gemini] Analyzing image for meal #{meal_log_id} ({sender})...")
+        print(f"[Gemini] Analyzing image for meal #({sender})...")
         analysis = run_gemini_vision_pipeline(filename, caption)
 
         c.execute(
@@ -296,7 +296,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             f" {analysis.get('primary_fuel_source')}"
         )
     except Exception as e:
-        print(f"[Gemini Error] Processing failed for meal #{meal_log_id}: {e}")
+        print(f"[Gemini Error] Processing failed for meal: {e}")
     finally:
         conn.close()
 
