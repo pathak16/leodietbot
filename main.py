@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
+from google.api_core.exceptions import ResourceExhausted
 
 load_dotenv()
 

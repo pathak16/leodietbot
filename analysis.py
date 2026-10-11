@@ -27,11 +27,60 @@ class MacroAnalysis(typing.TypedDict):
     crash_risk_level: str  # "High", "Medium", "Low"
 
 
+# def run_gemini_vision_pipeline(image_path: str, caption: str = "") -> dict:
+#     """Sends the local image to Gemini 3.5 Flash and returns parsed JSON."""
+#     model = genai.GenerativeModel("gemini-3.5-flash")
+
+#     # Upload temporary image to Google API
+#     uploaded_file = genai.upload_file(path=image_path)
+
+#     prompt = f"""
+#     You are a nutritional research scientist analyzing everyday Indian diets.
+#     Participant's caption: "{caption}".
+
+#     Examine this photo and extract the nutritional profile and behavioral indicators.
+#     - If packaged, evaluate brand/nutrition indicators if visible.
+#     - If home-cooked or street food, estimate portions based on standard Indian household servings (e.g., standard katori = 150g, 1 roti = ~30g flour).
+#     - Flag quick energy fixes (chai with sugar, cola, biscuits, energy drinks) under is_caffeine_or_sugar_crutch.
+#     - Assess glycemic crash risk based on the balance of carbs vs protein and fiber.
+#     """
+#     try:
+#         max_retries = 3
+#         for attempt in range(max_retries):
+#             try:
+#                 response = model.generate_content(
+#                     [uploaded_file, prompt],
+#                     generation_config=genai.GenerationConfig(
+#                         response_mime_type="application/json",
+#                         response_schema=MacroAnalysis,
+#                         temperature=0.2,
+#                     ),
+#                 )
+#                 result = json.loads(response.text)
+
+#             except ResourceExhausted:
+#                 if attempt < max_retries - 1:
+#                     print(
+#                         f"[Rate Limit] 5 RPM hit on attempt {attempt + 1}. Waiting 20s..."
+#                     )
+#                     time.sleep(20)
+#                 else:
+#                     raise
+
+#             finally:
+#                 # Always delete from Google's temporary storage
+#                 try:
+#                     uploaded_file.delete()
+#                 except Exception:
+#                     pass
+
+
+#     return result
 def run_gemini_vision_pipeline(image_path: str, caption: str = "") -> dict:
-    """Sends the local image to Gemini 1.5 Flash and returns parsed JSON."""
+    """Sends the local image to Gemini 3.5 Flash and returns parsed JSON."""
     model = genai.GenerativeModel("gemini-3.5-flash")
 
-    # Upload temporary image to Google API
+    # 1. Upload temporary image to Google API
     uploaded_file = genai.upload_file(path=image_path)
 
     prompt = f"""
@@ -46,20 +95,31 @@ def run_gemini_vision_pipeline(image_path: str, caption: str = "") -> dict:
     """
 
     try:
-        response = model.generate_content(
-            [uploaded_file, prompt],
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json",
-                response_schema=MacroAnalysis,
-                temperature=0.2,
-            ),
-        )
-        result = json.loads(response.text)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(
+                    [uploaded_file, prompt],
+                    generation_config=genai.GenerationConfig(
+                        response_mime_type="application/json",
+                        response_schema=MacroAnalysis,
+                        temperature=0.2,
+                    ),
+                )
+                return json.loads(response.text)
+
+            except ResourceExhausted:
+                if attempt < max_retries - 1:
+                    print(
+                        f"[Rate Limit] 5 RPM hit on attempt {attempt + 1}. Waiting 20s..."
+                    )
+                    time.sleep(20)
+                else:
+                    raise
+
     finally:
-        # Always delete from Google's temporary storage
+        # 2. Delete the remote file only once when done (success or final failure)
         try:
             uploaded_file.delete()
-        except Exception:
-            pass
-
-    return result
+        except Exception as e:
+            print(f"[Cleanup Warning] Could not delete remote file: {e}")
