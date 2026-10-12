@@ -70,7 +70,11 @@ def view_dashboard():
         <table>
             <tr><th>Phone Number</th><th>Registered At</th><th>Status</th><th>Last Interaction</th></tr>
     """
-    for phone, start_ts, status in users:
+    
+    now = datetime.now()
+    cutoff_24h = now - timedelta(hours=24)
+
+    for phone, start_ts, status, last_int in users:
 
         def parse_dt(val):
             if not val:
@@ -116,6 +120,36 @@ def view_dashboard():
 
     html += "</table></body></html>"
     return html
+
+    def parse_dt(val):
+            if not val:
+                return None
+            if isinstance(val, (int, float)):
+                return datetime.fromtimestamp(val)
+            if isinstance(val, str):
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+                    try:
+                        return datetime.strptime(val[:19], fmt)
+                    except ValueError:
+                        pass
+
+    return None
+
+    reg_dt = parse_dt(start_ts)
+    last_dt = parse_dt(last_int)
+
+    reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
+    last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
+
+    # Status check: check if the most recent activity is older than 24 hours
+    latest_activity = last_dt or reg_dt
+    if latest_activity and latest_activity < cutoff_24h:
+        status_label = "inactive"
+        badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
+    else:
+        status_label = "active"
+        badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
+        html += f"<tr><td>{phone}</td><td>{readable_time}</td><td><span class='badge badge-active'>{status}</span></td><td>{}</td></tr>"
 
     html += """
         </table>
