@@ -166,18 +166,21 @@ def view_json_logs():
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+
     c.execute(
         """
-        CREATE TABLE IF NOT EXISTS test_meal_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone_number TEXT,
-            timestamp DATETIME,
-            meal_type TEXT,
-            caption TEXT,
-            image_path TEXT
-        )
-    """
+    SELECT 
+        u.phone_number,
+        u.start_timestamp,
+        u.status,
+        MAX(m.timestamp) AS last_interaction
+    FROM users u
+    LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+    GROUP BY u.phone_number
+    ORDER BY last_interaction DESC NULLS LAST
+"""
     )
+    rows = c.fetchall()
 
     # Participants table: anchors their individual 15-day clock
     c.execute(
@@ -246,8 +249,13 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         filename = os.path.join(
             IMAGE_DIR, f"{sender}_{int(datetime.now().timestamp())}.jpg"
         )
-        with open(filename, "wb") as f:
-            f.write(img_response.content)
+        # with open(filename, "wb") as f:
+        #     f.write(img_response.content)
+
+        image = Image.open(io.BytesIO(img_response.content))
+        image = image.convert("RGB")
+        image.thumbnail((1024, 1024))  # keeps aspect ratio, shrinks max edge
+        image.save(filename, "JPEG", optimize=True, quality=75)
 
         # D. Send WhatsApp confirmation reply
         ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -351,14 +359,22 @@ async def view_users():
     html = "<html><head><title>Participants</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;max-width:600px;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}</style></head><body>"
     html += f"<h2>Registered Participants ({len(rows)})</h2>"
     html += "<p><a href='/admin/meals'>View Logged Meals &amp; Photos &rarr;</a></p>"
-    html += (
-        "<table><tr><th>Phone Number</th><th>Registration Time</th><th>Status</th></tr>"
-    )
-    for phone, ts, status in rows:
+    html += "<table><tr><th>Phone Number</th><th>Registration Time</th><th>Status</th><th>Last Interaction</th></tr>"
+    for phone, ts, status, last_int in rows:
         time_str = (
             datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
         )
-        html += f"<tr><td>{phone}</td><td>{time_str}</td><td>{status}</td></tr>"
+        # Check if last_int is an integer timestamp or an ISO string
+        if last_int:
+            if isinstance(last_int, (int, float)):
+                last_str = datetime.fromtimestamp(last_int).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            else:
+                last_str = str(last_int)[:19]
+        else:
+            last_str = "Never logged"
+        html += f"<tr><td>{phone}</td><td>{time_str}</td><td>{status}</td><td>{last_str}</td></tr>"
     html += "</table></body></html>"
     return html
 
