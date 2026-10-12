@@ -68,7 +68,7 @@ def view_dashboard():
     <body>
         <h2>Registered Participants</h2>
         <table>
-            <tr><th>Phone Number</th><th>Registered At</th><th>Status</th></tr>
+            <tr><th>Phone Number</th><th>Registered At</th><th>Status</th><th>Last Interaction</th></tr>
     """
     for phone, start_ts, status in users:
         readable_time = (
