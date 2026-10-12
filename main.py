@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request, Response, BackgroundTasks
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from google.api_core.exceptions import ResourceExhausted
+import io
+from PIL import Image
 
 load_dotenv()
 
@@ -283,6 +285,7 @@ init_db()
 
 # 3. Worker to download media, save to disk, record in DB, and reply
 def process_incoming_meal(media_id: str, sender: str, caption: str):
+    conn = None
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
     try:
         # A. Fetch binary download URL from Meta
@@ -305,13 +308,20 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         filename = os.path.join(
             IMAGE_DIR, f"{sender}_{int(datetime.now().timestamp())}.jpg"
         )
-        # with open(filename, "wb") as f:
-        #     f.write(img_response.content)
 
         image = Image.open(io.BytesIO(img_response.content))
         image = image.convert("RGB")
         image.thumbnail((1024, 1024))  # keeps aspect ratio, shrinks max edge
         image.save(filename, "JPEG", optimize=True, quality=75)
+
+        # 2. Connect and execute
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
+            (sender, datetime.now(), caption, filename),
+        )
+        conn.commit()
 
         # D. Send WhatsApp confirmation reply
         ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -355,6 +365,10 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
+
+    finally:
+        if conn:
+            conn.close()
 
     # 4. Real-time Gemini Processing Pipeline
     try:
