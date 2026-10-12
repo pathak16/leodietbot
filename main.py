@@ -314,8 +314,6 @@ def view_dashboard():
     #     except Exception as e:
     #         html += f"<p>Error reading {filename}: {e}</p>"
 
-    html += "</div></body></html>"
-    return html
     return page_html
 
 
