@@ -36,9 +36,19 @@ def view_dashboard():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    # 1. Fetch Users
+    # 1. Fetch Users (Fixed SQL to include the Last Interaction join)
     c.execute(
-        "SELECT phone_number, start_timestamp, status FROM users ORDER BY start_timestamp DESC"
+        """
+        SELECT 
+            u.phone_number,
+            u.start_timestamp,
+            u.status,
+            MAX(m.timestamp) AS last_interaction
+        FROM users u
+        LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+        GROUP BY u.phone_number
+        ORDER BY last_interaction DESC NULLS LAST
+    """
     )
     users = c.fetchall()
 
@@ -70,7 +80,7 @@ def view_dashboard():
         <table>
             <tr><th>Phone Number</th><th>Registered At</th><th>Status</th><th>Last Interaction</th></tr>
     """
-    
+
     now = datetime.now()
     cutoff_24h = now - timedelta(hours=24)
 
@@ -121,36 +131,6 @@ def view_dashboard():
     html += "</table></body></html>"
     return html
 
-    def parse_dt(val):
-            if not val:
-                return None
-            if isinstance(val, (int, float)):
-                return datetime.fromtimestamp(val)
-            if isinstance(val, str):
-                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
-                    try:
-                        return datetime.strptime(val[:19], fmt)
-                    except ValueError:
-                        pass
-
-    return None
-
-    reg_dt = parse_dt(start_ts)
-    last_dt = parse_dt(last_int)
-
-    reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
-    last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
-
-    # Status check: check if the most recent activity is older than 24 hours
-    latest_activity = last_dt or reg_dt
-    if latest_activity and latest_activity < cutoff_24h:
-        status_label = "inactive"
-        badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
-    else:
-        status_label = "active"
-        badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
-        html += f"<tr><td>{phone}</td><td>{readable_time}</td><td><span class='badge badge-active'>{status}</span></td><td>{}</td></tr>"
-
     html += """
         </table>
         <h2>Logged Meals & Drinks</h2>
@@ -163,6 +143,11 @@ def view_dashboard():
             img_filename = os.path.basename(img_path)
             img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
         html += f"<tr><td>{phone}</td><td>{ts}</td><td>{caption}</td><td>{img_tag}</td></tr>"
+
+        # Cleanly format the timestamp for the logs table
+        log_dt = parse_dt(ts)
+        log_str = log_dt.strftime("%Y-%m-%d %H:%M:%S") if log_dt else str(ts)
+        html += f"<tr><td>{phone}</td><td>{log_str}</td><td>{caption}</td><td>{img_tag}</td></tr>"
 
     html += "</table></body></html>"
     return html
