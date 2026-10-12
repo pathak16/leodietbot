@@ -33,12 +33,202 @@ HARDCODED_NUDGES = {
 }
 
 
+# @app.get("/admin/dashboard", response_class=HTMLResponse)
+# def view_dashboard():
+#     conn = sqlite3.connect(DB_FILE)
+#     c = conn.cursor()
+
+#     # 1. Fetch Users (Fixed SQL to include the Last Interaction join)
+#     c.execute(
+#         """
+#         SELECT
+#             u.phone_number,
+#             u.start_timestamp,
+#             u.status,
+#             MAX(m.timestamp) AS last_interaction
+#         FROM users u
+#         LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+#         GROUP BY u.phone_number
+#         ORDER BY last_interaction DESC NULLS LAST
+#     """
+#     )
+#     users = c.fetchall()
+
+#     # 2. Fetch Meal Logs
+#     c.execute(
+#         "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC"
+#     )
+#     logs = c.fetchall()
+#     conn.close()
+
+#     # Build HTML Table
+#     html = """
+#     <html>
+#     <head>
+#         <title>Dietary Study Logs</title>
+#         <style>
+#             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; }
+#             h2 { margin-top: 32px; color: #1e293b; }
+#             table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+#             th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+#             th { background: #0f172a; color: white; }
+#             img { border-radius: 6px; object-fit: cover; }
+#             .badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
+#             .badge-active { background: #dcfce7; color: #15803d; }
+#         </style>
+#     </head>
+#     <body>
+#         <h2>Registered Participants</h2>
+#         <table>
+#             <tr><th>Phone Number</th><th>Registered At</th><th>Status</th><th>Last Interaction</th></tr>
+#     """
+
+#     now = datetime.now()
+#     cutoff_24h = now - timedelta(hours=24)
+
+#     def parse_dt(val):
+#         if not val:
+#             return None
+#         if isinstance(val, (int, float)):
+#             return datetime.fromtimestamp(val)
+#         if isinstance(val, str):
+#             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+#                 try:
+#                     return datetime.strptime(val[:19], fmt)
+#                 except ValueError:
+#                     pass
+#         return None
+
+#     for phone, start_ts, status, last_int in users:
+
+#         reg_dt = parse_dt(start_ts)
+#         last_dt = parse_dt(last_int)
+
+#         reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
+#         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
+
+#         # Status check: check if the most recent activity is older than 24 hours
+#         latest_activity = last_dt or reg_dt
+#         if latest_activity and latest_activity < cutoff_24h:
+#             status_label = "inactive"
+#             badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
+#         else:
+#             status_label = "active"
+#             badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
+
+#         html += f"""
+#             <tr style="border-bottom: 1px solid #e2e8f0;">
+#                 <td style="padding:12px; font-family:monospace;">{phone}</td>
+#                 <td style="padding:12px; color:#475569;">{reg_str}</td>
+#                 <td style="padding:12px;">
+#                     <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
+#                         {status_label}
+#             </span>
+#         </td>
+#         <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
+#     </tr>
+#     """
+
+#     html += "</table></body></html>"
+#     return html
+
+#     html += """
+#         </table>
+#         <h2>Logged Meals & Drinks</h2>
+#         <table>
+#             <tr><th>Phone Number</th><th>Timestamp</th><th>Note / Caption</th><th>Photo</th></tr>
+#     """
+#     for phone, ts, caption, img_path in logs:
+#         img_tag = "Text Only"
+#         if img_path and img_path != "text_only":
+#             img_filename = os.path.basename(img_path)
+#             img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
+
+#         # Cleanly format the timestamp for the logs table
+#         log_dt = parse_dt(ts)
+#         log_str = log_dt.strftime("%Y-%m-%d %H:%M:%S") if log_dt else str(ts)
+#         html += f"<tr><td>{phone}</td><td>{log_str}</td><td>{caption}</td><td>{img_tag}</td></tr>"
+
+#     html += "</table></body></html>"
+#     return html
+
+
+# # Admin Viewers to easily see users and meals in browser
+# # @app.get("/admin/users", response_class=HTMLResponse)
+# async def view_users():
+#     conn = sqlite3.connect(DB_FILE)
+#     c = conn.cursor()
+#     c.execute(
+#         """
+#     SELECT
+#         u.phone_number,
+#         u.start_timestamp,
+#         u.status,
+#         MAX(m.timestamp) AS last_interaction
+#     FROM users u
+#     LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+#     GROUP BY u.phone_number
+#     ORDER BY last_interaction DESC NULLS LAST
+# """
+#     )
+#     rows = c.fetchall()
+#     conn.close()
+
+#     html = "<html><head><title>Participants</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;max-width:600px;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}</style></head><body>"
+#     html += f"<h2>Registered Participants ({len(rows)})</h2>"
+#     html += "<p><a href='/admin/meals'>View Logged Meals &amp; Photos &rarr;</a></p>"
+#     html += "<table><tr><th>Phone Number</th><th>Registration Time</th><th>Status</th><th>Last Interaction</th></tr>"
+#     for phone, ts, status, last_int in rows:
+#         time_str = (
+#             datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
+#         )
+#         # Check if last_int is an integer timestamp or an ISO string
+#         if last_int:
+#             if isinstance(last_int, (int, float)):
+#                 last_str = datetime.fromtimestamp(last_int).strftime(
+#                     "%Y-%m-%d %H:%M:%S"
+#                 )
+#             else:
+#                 last_str = str(last_int)[:19]
+#         else:
+#             last_str = "Never logged"
+#         html += f"<tr><td>{phone}</td><td>{time_str}</td><td>{status}</td><td>{last_str}</td></tr>"
+#     html += "</table></body></html>"
+#     return html
+
+
+# # @app.get("/admin/meals", response_class=HTMLResponse)
+# async def view_meals():
+#     conn = sqlite3.connect(DB_FILE)
+#     c = conn.cursor()
+#     c.execute(
+#         "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC"
+#     )
+#     rows = c.fetchall()
+#     conn.close()
+
+#     html = "<html><head><title>Logged Meals</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}img{max-width:120px;border-radius:4px;}</style></head><body>"
+#     html += f"<h2>Logged Meals ({len(rows)})</h2>"
+#     html += "<p><a href='/admin/users'>&larr; View Participants</a></p>"
+#     html += (
+#         "<table><tr><th>Phone</th><th>Timestamp</th><th>Caption</th><th>Image</th></tr>"
+#     )
+#     for phone, ts, caption, img_path in rows:
+#         img_html = "Text only"
+#         if img_path and img_path != "text_only":
+#             fname = os.path.basename(img_path)
+#             img_html = f"<a href='/view-images/{fname}' target='_blank'><img src='/view-images/{fname}'/></a>"
+#         html += f"<tr><td>{phone}</td><td>{ts}</td><td>{caption or ''}</td><td>{img_html}</td></tr>"
+#     html += "</table></body></html>"
+#     return html
+
+
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 def view_dashboard():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    # 1. Fetch Users (Fixed SQL to include the Last Interaction join)
+    # 1. Fetch users with their latest interaction
     c.execute(
         """
         SELECT 
@@ -54,38 +244,14 @@ def view_dashboard():
     )
     users = c.fetchall()
 
-    # 2. Fetch Meal Logs
+    # 2. Fetch logged meals and drinks
     c.execute(
         "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC"
     )
     logs = c.fetchall()
     conn.close()
 
-    # Build HTML Table
-    html = """
-    <html>
-    <head>
-        <title>Dietary Study Logs</title>
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; }
-            h2 { margin-top: 32px; color: #1e293b; }
-            table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-            th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
-            th { background: #0f172a; color: white; }
-            img { border-radius: 6px; object-fit: cover; }
-            .badge { padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; }
-            .badge-active { background: #dcfce7; color: #15803d; }
-        </style>
-    </head>
-    <body>
-        <h2>Registered Participants</h2>
-        <table>
-            <tr><th>Phone Number</th><th>Registered At</th><th>Status</th><th>Last Interaction</th></tr>
-    """
-
-    now = datetime.now()
-    cutoff_24h = now - timedelta(hours=24)
-
+    # Helper function to parse database timestamps
     def parse_dt(val):
         if not val:
             return None
@@ -99,15 +265,43 @@ def view_dashboard():
                     pass
         return None
 
-    for phone, start_ts, status, last_int in users:
+    now = datetime.now()
+    cutoff_24h = now - timedelta(hours=24)
 
+    # HTML boilerplate and styles
+    html = """<!DOCTYPE html>
+    <html>
+    <head>
+        <title>Dietary Study Logs</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; color: #1e293b; }
+            h2 { margin-top: 32px; color: #0f172a; }
+            table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }
+            th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+            th { background: #0f172a; color: white; }
+            img { border-radius: 6px; object-fit: cover; }
+        </style>
+    </head>
+    <body>
+        <h2>Registered Participants</h2>
+        <table>
+            <tr>
+                <th>Phone Number</th>
+                <th>Registered At</th>
+                <th>Status</th>
+                <th>Last Interaction</th>
+            </tr>
+    """
+
+    # Table 1: Participants
+    for phone, start_ts, db_status, last_int in users:
         reg_dt = parse_dt(start_ts)
         last_dt = parse_dt(last_int)
 
         reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
 
-        # Status check: check if the most recent activity is older than 24 hours
+        # Check if latest activity exceeds 24 hours
         latest_activity = last_dt or reg_dt
         if latest_activity and latest_activity < cutoff_24h:
             status_label = "inactive"
@@ -123,33 +317,52 @@ def view_dashboard():
                 <td style="padding:12px;">
                     <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
                         {status_label}
-            </span>
-        </td>
-        <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
-    </tr>
-    """
+                    </span>
+                </td>
+                <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
+            </tr>
+        """
 
-    html += "</table></body></html>"
-    return html
-
+    # Close table 1 and begin table 2
     html += """
         </table>
+
         <h2>Logged Meals & Drinks</h2>
         <table>
-            <tr><th>Phone Number</th><th>Timestamp</th><th>Note / Caption</th><th>Photo</th></tr>
+            <tr>
+                <th>Phone Number</th>
+                <th>Timestamp</th>
+                <th>Note / Caption</th>
+                <th>Photo</th>
+            </tr>
     """
+
+    # Table 2: Meal and drink logs
     for phone, ts, caption, img_path in logs:
         img_tag = "Text Only"
         if img_path and img_path != "text_only":
             img_filename = os.path.basename(img_path)
             img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
 
-        # Cleanly format the timestamp for the logs table
         log_dt = parse_dt(ts)
         log_str = log_dt.strftime("%Y-%m-%d %H:%M:%S") if log_dt else str(ts)
-        html += f"<tr><td>{phone}</td><td>{log_str}</td><td>{caption}</td><td>{img_tag}</td></tr>"
+        note_str = caption or ""
 
-    html += "</table></body></html>"
+        html += f"""
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding:12px; font-family:monospace;">{phone}</td>
+                <td style="padding:12px; color:#475569;">{log_str}</td>
+                <td style="padding:12px;">{note_str}</td>
+                <td style="padding:12px;">{img_tag}</td>
+            </tr>
+        """
+
+    html += """
+        </table>
+    </body>
+    </html>
+    """
+
     return html
 
 
@@ -413,76 +626,6 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         print(f"[Gemini Error] Processing failed for meal: {e}")
     finally:
         conn.close()
-
-
-# Admin Viewers to easily see users and meals in browser
-@app.get("/admin/users", response_class=HTMLResponse)
-async def view_users():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        """
-    SELECT 
-        u.phone_number,
-        u.start_timestamp,
-        u.status,
-        MAX(m.timestamp) AS last_interaction
-    FROM users u
-    LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
-    GROUP BY u.phone_number
-    ORDER BY last_interaction DESC NULLS LAST
-"""
-    )
-    rows = c.fetchall()
-    conn.close()
-
-    html = "<html><head><title>Participants</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;max-width:600px;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}</style></head><body>"
-    html += f"<h2>Registered Participants ({len(rows)})</h2>"
-    html += "<p><a href='/admin/meals'>View Logged Meals &amp; Photos &rarr;</a></p>"
-    html += "<table><tr><th>Phone Number</th><th>Registration Time</th><th>Status</th><th>Last Interaction</th></tr>"
-    for phone, ts, status, last_int in rows:
-        time_str = (
-            datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "N/A"
-        )
-        # Check if last_int is an integer timestamp or an ISO string
-        if last_int:
-            if isinstance(last_int, (int, float)):
-                last_str = datetime.fromtimestamp(last_int).strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            else:
-                last_str = str(last_int)[:19]
-        else:
-            last_str = "Never logged"
-        html += f"<tr><td>{phone}</td><td>{time_str}</td><td>{status}</td><td>{last_str}</td></tr>"
-    html += "</table></body></html>"
-    return html
-
-
-@app.get("/admin/meals", response_class=HTMLResponse)
-async def view_meals():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC"
-    )
-    rows = c.fetchall()
-    conn.close()
-
-    html = "<html><head><title>Logged Meals</title><style>body{font-family:sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;}th,td{border:1px solid #ccc;padding:8px;text-align:left;}th{background:#f4f4f4;}img{max-width:120px;border-radius:4px;}</style></head><body>"
-    html += f"<h2>Logged Meals ({len(rows)})</h2>"
-    html += "<p><a href='/admin/users'>&larr; View Participants</a></p>"
-    html += (
-        "<table><tr><th>Phone</th><th>Timestamp</th><th>Caption</th><th>Image</th></tr>"
-    )
-    for phone, ts, caption, img_path in rows:
-        img_html = "Text only"
-        if img_path and img_path != "text_only":
-            fname = os.path.basename(img_path)
-            img_html = f"<a href='/view-images/{fname}' target='_blank'><img src='/view-images/{fname}'/></a>"
-        html += f"<tr><td>{phone}</td><td>{ts}</td><td>{caption or ''}</td><td>{img_html}</td></tr>"
-    html += "</table></body></html>"
-    return html
 
 
 # 4. Meta Webhook Handshake Verification (GET)
