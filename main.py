@@ -76,6 +76,7 @@ def view_dashboard():
         return None
 
     now = datetime.now()
+    today_date = now.date()
     cutoff_24h = now - timedelta(hours=24)
 
     # HTML boilerplate and styles
@@ -105,9 +106,10 @@ def view_dashboard():
     """
 
     # Table 1: Participants
-    for phone, start_ts, db_status, last_int in users:
+    for phone, start_ts, db_status, first_int, last_int in users:
         reg_dt = parse_dt(start_ts)
         last_dt = parse_dt(last_int)
+        first_dt = parse_dt(first_int)
 
         reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
