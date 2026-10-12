@@ -351,7 +351,17 @@ async def view_users():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
-        "SELECT phone_number, start_timestamp, status FROM users ORDER BY start_timestamp DESC"
+        """
+    SELECT 
+        u.phone_number,
+        u.start_timestamp,
+        u.status,
+        MAX(m.timestamp) AS last_interaction
+    FROM users u
+    LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+    GROUP BY u.phone_number
+    ORDER BY last_interaction DESC NULLS LAST
+"""
     )
     rows = c.fetchall()
     conn.close()
