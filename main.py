@@ -33,164 +33,6 @@ HARDCODED_NUDGES = {
 }
 
 
-# @app.get("/admin/dashboard", response_class=HTMLResponse)
-# def view_dashboard():
-#     conn = sqlite3.connect(DB_FILE)
-#     c = conn.cursor()
-
-#     # 1. Fetch users with their latest interaction
-#     c.execute(
-#         """
-#         SELECT
-#             u.phone_number,
-#             u.start_timestamp,
-#             u.status,
-#             MAX(m.timestamp) AS last_interaction
-#         FROM users u
-#         LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
-#         GROUP BY u.phone_number
-#         ORDER BY last_interaction DESC NULLS LAST
-#     """
-#     )
-#     users = c.fetchall()
-
-#     # 2. Fetch logged meals and drinks
-#     c.execute(
-#         "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs ORDER BY timestamp DESC"
-#     )
-#     logs = c.fetchall()
-#     conn.close()
-
-#     # Helper function to parse database timestamps
-#     def parse_dt(val):
-#         if not val:
-#             return None
-#         if isinstance(val, (int, float)):
-#             return datetime.fromtimestamp(val)
-#         if isinstance(val, str):
-#             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
-#                 try:
-#                     return datetime.strptime(val[:19], fmt)
-#                 except ValueError:
-#                     pass
-#         return None
-
-#     now = datetime.now()
-#     today_date = now.date()
-#     cutoff_24h = now - timedelta(hours=24)
-
-#     # HTML boilerplate and styles
-#     html = """<!DOCTYPE html>
-#     <html>
-#     <head>
-#         <title>Dietary Study Logs</title>
-#         <style>
-#             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; color: #1e293b; }
-#             h2 { margin-top: 32px; color: #0f172a; }
-#             table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }
-#             th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
-#             th { background: #0f172a; color: white; }
-#             img { border-radius: 6px; object-fit: cover; }
-#         </style>
-#     </head>
-#     <body>
-#         <h2>Registered Participants</h2>
-#         <table>
-#             <tr>
-#                 <th>Phone Number</th>
-#                 <th>Registered At</th>
-#                 <th>Study Day</th>
-#                 <th>Status</th>
-#                 <th>Last Interaction</th>
-#             </tr>
-#     """
-
-#     # Table 1: Participants
-#     for phone, start_ts, db_status, first_int, last_int in users:
-#         reg_dt = parse_dt(start_ts)
-#         last_dt = parse_dt(last_int)
-#         first_dt = parse_dt(first_int)
-
-#         reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
-#         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
-
-#         # Calculate calendar-based Study Day from first meal log
-#         if first_dt:
-#             first_date = first_dt.date()
-#             day_num = (today_date - first_date).days + 1
-#             if day_num > 15:
-#                 day_badge = f"<span style='color:#64748b; font-weight:600;'>Completed (Day {day_num})</span>"
-#             else:
-#                 day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
-#         else:
-#             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-
-#         # Check if latest activity exceeds 24 hours
-#         latest_activity = last_dt or reg_dt
-#         if latest_activity and latest_activity < cutoff_24h:
-#             status_label = "inactive"
-#             badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
-#         else:
-#             status_label = "active"
-#             badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
-
-#         html += f"""
-#             <tr style="border-bottom: 1px solid #e2e8f0;">
-#                 <td style="padding:12px; font-family:monospace;">{phone}</td>
-#                 <td style="padding:12px; color:#475569;">{reg_str}</td>
-#                 <td style="padding:12px;">{day_badge}</td>
-#                 <td style="padding:12px;">
-#                     <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
-#                         {status_label}
-#                     </span>
-#                 </td>
-#                 <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
-#             </tr>
-#         """
-
-#     # Close table 1 and begin table 2
-#     html += """
-#         </table>
-
-#         <h2>Logged Meals & Drinks</h2>
-#         <table>
-#             <tr>
-#                 <th>Phone Number</th>
-#                 <th>Timestamp</th>
-#                 <th>Note / Caption</th>
-#                 <th>Photo</th>
-#             </tr>
-#     """
-
-#     # Table 2: Meal and drink logs
-#     for phone, ts, caption, img_path in logs:
-#         img_tag = "Text Only"
-#         if img_path and img_path != "text_only":
-#             img_filename = os.path.basename(img_path)
-#             img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
-
-#         log_dt = parse_dt(ts)
-#         log_str = log_dt.strftime("%Y-%m-%d %H:%M:%S") if log_dt else str(ts)
-#         note_str = caption or ""
-
-#         html += f"""
-#             <tr style="border-bottom: 1px solid #e2e8f0;">
-#                 <td style="padding:12px; font-family:monospace;">{phone}</td>
-#                 <td style="padding:12px; color:#475569;">{log_str}</td>
-#                 <td style="padding:12px;">{note_str}</td>
-#                 <td style="padding:12px;">{img_tag}</td>
-#             </tr>
-#         """
-
-#     html += """
-#         </table>
-#     </body>
-#     </html>
-#     """
-
-#     return html
-
-
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 def view_dashboard():
     conn = sqlite3.connect(DB_FILE)
@@ -248,11 +90,33 @@ def view_dashboard():
             th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
             th { background: #0f172a; color: white; }
             img { border-radius: 6px; object-fit: cover; }
+            .search-box {
+                width: 100%;
+                max-width: 400px;
+                padding: 10px 14px;
+                margin-bottom: 20px;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                font-size: 14px;
+                outline: none;
+                box-sizing: border-box;
+            }
+            .search-box:focus {
+                border-color: #2563eb;
+                box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+            }
         </style>
     </head>
     <body>
         <h2>Registered Participants</h2>
-        <table>
+        <input 
+            type="text" 
+            id="phoneSearch" 
+            class="search-box" 
+            placeholder="Search by phone number..." 
+            onkeyup="filterByPhone()"
+        />
+        <table id="participantsTable">
             <tr>
                 <th>Phone Number</th>
                 <th>Registered At</th>
@@ -309,7 +173,7 @@ def view_dashboard():
         </table>
 
         <h2>Logged Meals & Drinks</h2>
-        <table>
+        <table id="mealsTable">
             <tr>
                 <th>Phone Number</th>
                 <th>Timestamp</th>
@@ -340,6 +204,35 @@ def view_dashboard():
 
     html += """
         </table>
+        <script>
+        function filterByPhone() {
+            var input = document.getElementById("phoneSearch");
+            var filter = input.value.trim().toLowerCase();
+            
+            var tables = ["participantsTable", "mealsTable"];
+            
+            tables.forEach(function(tableId) {
+                var table = document.getElementById(tableId);
+                if (!table) return;
+                
+                var tr = table.getElementsByTagName("tr");
+                
+                // Start from index 1 to preserve table headers
+                for (var i = 1; i < tr.length; i++) {
+                    var tdPhone = tr[i].getElementsByTagName("td")[0];
+                    if (tdPhone) {
+                        var phoneText = tdPhone.textContent || tdPhone.innerText;
+                        if (phoneText.toLowerCase().indexOf(filter) > -1) {
+                            tr[i].style.display = "";
+                        } else {
+                            tr[i].style.display = "none";
+                        }
+                    }
+                }
+            });
+        }
+        </script>
+    
     </body>
     </html>
     """
