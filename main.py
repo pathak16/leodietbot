@@ -341,8 +341,6 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             caption TEXT,
             image_path TEXT,
-            wamid TEXT UNIQUE,
-            FOREIGN KEY (phone_number) REFERENCES users(phone_number)
         )
     """
     )
@@ -367,19 +365,6 @@ def init_db():
     primary_fuel_source TEXT,
     crash_risk_level TEXT,
     raw_json TEXT,
-    FOREIGN KEY (meal_log_id) REFERENCES test_meal_logs(id),
-    FOREIGN KEY (phone_number) REFERENCES users(phone_number)
-    )
-    """
-    )
-
-    c.execute(
-        """
-    DELETE FROM test_meal_logs
-    WHERE id NOT IN (
-        SELECT MIN(id)
-        FROM test_meal_logs
-        GROUP BY phone_number, caption, strftime('%Y-%m-%d %H:%M', timestamp)
     )
     """
     )
@@ -425,14 +410,6 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         # 2. Connect and execute
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-
-        if wamid:
-            c.execute("SELECT id FROM test_meal_logs WHERE wamid = ?", (wamid,))
-            if c.fetchone():
-                print(f"[Duplicate Ignored] Message {wamid} already processed.")
-                conn.close()
-                return
-
         c.execute(
             "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
             (sender, datetime.now(), caption, filename),
