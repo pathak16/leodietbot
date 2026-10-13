@@ -365,6 +365,8 @@ def init_db():
     primary_fuel_source TEXT,
     crash_risk_level TEXT,
     raw_json TEXT,
+    FOREIGN KEY (meal_log_id) REFERENCES test_meal_logs(id),
+    FOREIGN KEY (phone_number) REFERENCES users(phone_number)
     )
     """
     )
