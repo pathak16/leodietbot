@@ -347,20 +347,6 @@ def init_db():
     """
     )
 
-    # Migration: add wamid column to existing tables if missing
-    try:
-        c.execute("ALTER TABLE test_meal_logs ADD COLUMN wamid TEXT")
-    except sqlite3.OperationalError:
-        pass  # column already exists
-
-    # Enforce uniqueness via index for existing tables
-    c.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_test_meal_logs_wamid 
-        ON test_meal_logs(wamid)
-    """
-    )
-
     c.execute(
         """CREATE TABLE IF NOT EXISTS meal_nutrition (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
