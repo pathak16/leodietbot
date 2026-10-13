@@ -340,7 +340,7 @@ def init_db():
             phone_number TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             caption TEXT,
-            image_path TEXT,
+            image_path TEXT
         )
     """
     )
