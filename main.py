@@ -574,9 +574,6 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
             if msg["type"] == "image":
                 media_id = msg["image"]["id"]
                 caption = msg["image"].get("caption", "").strip()
-                bg_tasks.add_task(
-                    process_incoming_meal, media_id, sender, caption, wamid
-                )
 
                 if caption:
                     bg_tasks.add_task(process_incoming_meal, media_id, sender, caption)
