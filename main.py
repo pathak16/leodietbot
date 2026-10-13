@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
-from google.api_core.exceptions import ResourceExhausted
 import io
 from PIL import Image
 
@@ -283,37 +282,6 @@ def view_dashboard():
     </body>
     </html>
     """
-
-    # def view_json_logs():
-    #     image_dir = "/app/data/images/"
-    #     if not os.path.exists(image_dir):
-    #         return "<h3>No data directory found yet. Send a photo first!</h3>"
-
-    #     # Find all files ending in _analysis.json
-    #     files = [f for f in os.listdir(image_dir) if f.endswith("_analysis.json")]
-
-    # if not files:
-    #     return "<h3>No JSON files found yet. Send a photo first!</h3>"
-
-    # html = "<html><body style='font-family: sans-serif; padding: 20px;'><h2>Raw Gemini JSON Logs</h2><div style='display:flex; flex-wrap:wrap; gap: 20px;'>"
-
-    # for filename in sorted(files, reverse=True):  # Newest first
-    #     filepath = os.path.join(image_dir, filename)
-    #     try:
-    #         with open(filepath, "r") as f:
-    #             data = json.load(f)
-
-    #         # Pretty print the JSON inside a card
-    #         pretty_json = json.dumps(data, indent=2)
-    #         html += f"""
-    #         <div style="border: 1px solid #ccc; padding: 15px; border-radius: 8px; width: 400px; background: #f9f9f9;">
-    #             <h4 style="margin-top: 0; color: #333;">{filename}</h4>
-    #             <pre style="font-size: 11px; white-space: pre-wrap; word-wrap: break-word;">{pretty_json}</pre>
-    #         </div>
-    #         """
-    #     except Exception as e:
-    #         html += f"<p>Error reading {filename}: {e}</p>"
-
     return page_html
 
 
@@ -349,28 +317,23 @@ DATA_DIR, IMAGE_DIR, DB_FILE = init_storage()
 app.mount("/view-images", StaticFiles(directory=IMAGE_DIR), name="images")
 
 
-# @app.get("/admin/json-logs", response_class=HTMLResponse)
-
-
 # 1. Initialize SQLite Database
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
-    c.execute(
-        """
-    SELECT 
-        u.phone_number,
-        u.start_timestamp,
-        u.status,
-        MAX(m.timestamp) AS last_interaction
-    FROM users u
-    LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
-    GROUP BY u.phone_number
-    ORDER BY last_interaction DESC NULLS LAST
-"""
-    )
-    rows = c.fetchall()
+    #     c.execute("""SELECT
+    #         u.phone_number,
+    #         u.start_timestamp,
+    #         u.status,
+    #         MAX(m.timestamp) AS last_interaction
+    #     FROM users u
+    #     LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+    #     GROUP BY u.phone_number
+    #     ORDER BY last_interaction DESC NULLS LAST
+    # """
+    #     )
+    # rows = c.fetchall()
 
     # Participants table: anchors their individual 15-day clock
     c.execute(
@@ -380,6 +343,19 @@ def init_db():
             first_name TEXT,
             start_timestamp INTEGER,
             status TEXT DEFAULT 'active'
+        )
+    """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS test_meal_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone_number TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            caption TEXT,
+            image_path TEXT,
+            FOREIGN KEY (phone_number) REFERENCES users(phone_number)
         )
     """
     )

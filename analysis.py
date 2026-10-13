@@ -2,6 +2,7 @@ import json
 import os
 import typing_extensions as typing
 import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
