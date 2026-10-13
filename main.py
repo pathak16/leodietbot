@@ -417,6 +417,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             (sender, datetime.now(), caption, filename),
         )
         conn.commit()
+        meal_log_id = c.lastrowid
 
         # D. Send WhatsApp confirmation reply
         ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -440,23 +441,55 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             )
 
             # 2. Save to a local JSON file in your persistent volume
-            output_filepath = f"{filename}_analysis.json"
-            with open(output_filepath, "w") as json_file:
-                json.dump(gemini_output, json_file, indent=2)
+            base_name, _ = os.path.splitext(filename)
+            output_filepath = f"{base_name}_analysis.json"
+            with open(output_filepath, "w", encoding="utf-8") as json_file:
+                json.dump(gemini_output, json_file, indent=2, ensure_ascii=False)
+
+            if conn and meal_log_id:
+                c.execute(
+                    """
+                    INSERT INTO meal_nutrition (
+                        meal_log_id, phone_number, identified_items, meal_type,
+                        food_source_type, staple_format, protein_grams, carbs_grams,
+                        fat_grams, fiber_grams, protein_source_present, protein_source_type,
+                        is_caffeine_or_sugar_crutch, primary_fuel_source, crash_risk_level, raw_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        meal_log_id,
+                        sender,
+                        json.dumps(gemini_output.get("identified_items", [])),
+                        gemini_output.get("meal_type"),
+                        gemini_output.get("food_source_type"),
+                        gemini_output.get("staple_format"),
+                        gemini_output.get("estimated_protein_grams", 0.0),
+                        gemini_output.get("estimated_carbs_grams", 0.0),
+                        gemini_output.get("estimated_fat_grams", 0.0),
+                        gemini_output.get("estimated_fiber_grams", 0.0),
+                        gemini_output.get("protein_source_present", False),
+                        gemini_output.get("protein_source_type"),
+                        gemini_output.get("is_caffeine_or_sugar_crutch", False),
+                        gemini_output.get("primary_fuel_source"),
+                        gemini_output.get("crash_risk_level"),
+                        json.dumps(gemini_output),
+                    ),
+                )
+                conn.commit()
 
         except Exception as e:
             print(f"--- GEMINI PROCESSING FAILED ---\n{e}")
 
         # C. Insert into SQLite
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
-            (sender, datetime.now(), caption, filename),
-        )
-        conn.commit()
-        conn.close()
-        print(f"[Success] Saved meal from {sender} -> {filename}")
+        # conn = sqlite3.connect(DB_FILE)
+        # c = conn.cursor()
+        # c.execute(
+        #     "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
+        #     (sender, datetime.now(), caption, filename),
+        # )
+        # conn.commit()
+        # conn.close()
+        # print(f"[Success] Saved meal from {sender} -> {filename}")
 
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
@@ -466,48 +499,48 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             conn.close()
 
     # 4. Real-time Gemini Processing Pipeline
-    try:
-        print(f"[Gemini] Analyzing image for meal #({sender})...")
-        analysis = run_gemini_vision_pipeline(filename, caption)
+    # # try:
+    # #     print(f"[Gemini] Analyzing image for meal #({sender})...")
+    # #     analysis = run_gemini_vision_pipeline(filename, caption)
 
-        c.execute(
-            """
-                INSERT INTO meal_nutrition (
-                    meal_log_id, phone_number, identified_items, meal_type,
-                    food_source_type, staple_format, protein_grams, carbs_grams,
-                    fat_grams, fiber_grams, protein_source_present, protein_source_type,
-                    is_caffeine_or_sugar_crutch, primary_fuel_source, crash_risk_level, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                meal_log_id,
-                sender,
-                json.dumps(analysis.get("identified_items", [])),
-                analysis.get("meal_type"),
-                analysis.get("food_source_type"),
-                analysis.get("staple_format"),
-                analysis.get("estimated_protein_grams", 0.0),
-                analysis.get("estimated_carbs_grams", 0.0),
-                analysis.get("estimated_fat_grams", 0.0),
-                analysis.get("estimated_fiber_grams", 0.0),
-                analysis.get("protein_source_present", False),
-                analysis.get("protein_source_type"),
-                analysis.get("is_caffeine_or_sugar_crutch", False),
-                analysis.get("primary_fuel_source"),
-                analysis.get("crash_risk_level"),
-                json.dumps(analysis),
-            ),
-        )
-        conn.commit()
-        print(
-            f"[Gemini] Success: {analysis.get('identified_items')} | Protein:"
-            f" {analysis.get('estimated_protein_grams')}g | Fuel:"
-            f" {analysis.get('primary_fuel_source')}"
-        )
-    except Exception as e:
-        print(f"[Gemini Error] Processing failed for meal: {e}")
-    finally:
-        conn.close()
+    # #     c.execute(
+    # #         """
+    # #             INSERT INTO meal_nutrition (
+    # #                 meal_log_id, phone_number, identified_items, meal_type,
+    # #                 food_source_type, staple_format, protein_grams, carbs_grams,
+    # #                 fat_grams, fiber_grams, protein_source_present, protein_source_type,
+    # #                 is_caffeine_or_sugar_crutch, primary_fuel_source, crash_risk_level, raw_json
+    # #             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    # #         """,
+    # #         (
+    # #             meal_log_id,
+    # #             sender,
+    # #             json.dumps(analysis.get("identified_items", [])),
+    # #             analysis.get("meal_type"),
+    # #             analysis.get("food_source_type"),
+    # #             analysis.get("staple_format"),
+    # #             analysis.get("estimated_protein_grams", 0.0),
+    # #             analysis.get("estimated_carbs_grams", 0.0),
+    # #             analysis.get("estimated_fat_grams", 0.0),
+    # #             analysis.get("estimated_fiber_grams", 0.0),
+    # #             analysis.get("protein_source_present", False),
+    # #             analysis.get("protein_source_type"),
+    # #             analysis.get("is_caffeine_or_sugar_crutch", False),
+    # #             analysis.get("primary_fuel_source"),
+    # #             analysis.get("crash_risk_level"),
+    # #             json.dumps(analysis),
+    # #         ),
+    # #     )
+    # #     conn.commit()
+    # #     print(
+    # #         f"[Gemini] Success: {analysis.get('identified_items')} | Protein:"
+    # #         f" {analysis.get('estimated_protein_grams')}g | Fuel:"
+    # #         f" {analysis.get('primary_fuel_source')}"
+    # #     )
+    # except Exception as e:
+    #     print(f"[Gemini Error] Processing failed for meal: {e}")
+    # finally:
+    #     conn.close()
 
 
 # 4. Meta Webhook Handshake Verification (GET)
