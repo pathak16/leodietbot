@@ -334,18 +334,6 @@ def init_db():
     )
 
     c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS test_meal_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone_number TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            caption TEXT,
-            image_path TEXT,
-        )
-    """
-    )
-
-    c.execute(
         """CREATE TABLE IF NOT EXISTS meal_nutrition (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     meal_log_id INTEGER,
