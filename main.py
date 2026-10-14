@@ -158,25 +158,35 @@ def view_dashboard():
         reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
 
+        latest_activity = last_dt or reg_dt
+        is_inactive = bool(latest_activity and latest_activity < cutoff_24h)
+
+        if is_inactive:
+            status_label = "inactive"
+            badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
+        else:
+            status_label = "active"
+            badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
+
         if first_dt:
-            day_num = (today_date - first_dt.date()).days + 1
+
+            anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
+            day_num = (anchor_date - first_dt.date()).days + 1
+
             if day_num > 15:
                 day_badge = (
                     "<span style='color:#64748b; font-weight:600;'>Completed Day"
+                    f" {day_num}</span>"
+                )
+            elif is_inactive:
+                day_badge = (
+                    f"<span style='color:#ef4444; font-weight:700;'>Paused at Day"
                     f" {day_num}</span>"
                 )
             else:
                 day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
         else:
             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-
-        latest_activity = last_dt or reg_dt
-        if latest_activity and latest_activity < cutoff_24h:
-            status_label = "inactive"
-            badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
-        else:
-            status_label = "active"
-            badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
 
         page_html += f"""
             <tr style="border-bottom: 1px solid #e2e8f0;">
