@@ -11,6 +11,7 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 import io
 from PIL import Image
+import html as html_escape
 
 load_dotenv()
 
