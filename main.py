@@ -395,7 +395,7 @@ def view_dashboard(
     # 3. Fetch all meal logs
     # -------------------------------------------------------------
     c.execute(
-        "SELECT id, phone_number, timestamp, caption, image_path, meal_type FROM"
+        "SELECT id, phone_number, timestamp, caption, image_path, meal_type, analysis_json FROM"
         " test_meal_logs ORDER BY timestamp DESC"
     )
     raw_meals = c.fetchall()
@@ -528,50 +528,40 @@ def view_dashboard(
         else:
             img_html = "<span style='color:#94a3b8;'>Text Only</span>"
 
-        base_name, _ = os.path.splitext(img_path)
-        json_path = f"{base_name}_analysis.json"
-
-        if os.path.exists(json_path):
+        if analysis_json:
             try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    parsed_data = json.load(f)
-                    pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
-                    json_cell = f"""
-                    <details>
-                        <summary>View JSON</summary>
-                        <pre class="json-box">{pretty_json}</pre>
-                    </details>
-                    """
+                parsed_data = json.loads(analysis_json)
+                pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
+                json_cell = f"""
+                <details>
+                    <summary style="cursor:pointer; color:#2563eb; font-weight:600; font-size:13px;">▶ View JSON</summary>
+                    <pre class="json-box">{pretty_json}</pre>
+                </details>
+                """
             except Exception as e:
-                json_cell = f"<span style='color:#ef4444;'>Error reading JSON: {html_escape.escape(str(e))}</span>"
+                json_cell = f"<span style='color:#ef4444;'>Error: {html_escape.escape(str(e))}</span>"
         else:
-            json_cell = (
-                "<span style='color:#f59e0b; font-size:12px;'>Analysis"
-                " pending</span>"
-            )
+            json_cell = "<span style='color:#d97706; font-style:italic;'>Analysis pending</span>"
 
-        # # JSON Analysis Cell
-        # json_path = (
-        #     f"{os.path.splitext(img_path)[0]}_analysis.json"
-        #     if (img_path and img_path != "text_only")
-        #     else ""
-        # )
-        # if json_path and os.path.exists(json_path):
+        # base_name, _ = os.path.splitext(img_path)
+        # json_path = f"{base_name}_analysis.json"
+
+        # if os.path.exists(json_path):
         #     try:
-        #         with open(json_path, "r", encoding="utf-8") as jf:
-        #             parsed_data = json.load(jf)
-        #         pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
-        #         json_cell = f"""
+        #         with open(json_path, "r", encoding="utf-8") as f:
+        #             parsed_data = json.load(f)
+        #             pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
+        #             json_cell = f"""
         #             <details>
         #                 <summary style="cursor:pointer; color:#2563eb; font-weight:600; font-size:13px;">▶ View JSON</summary>
         #                 <pre class="json-box">{pretty_json}</pre>
         #             </details>
-        #         """
-        #     except Exception as err:
-        #         json_cell = f"<span style='color:#ef4444;'>Error: {html_escape.escape(str(err))}</span>"
+        #             """
+        #     except Exception as e:
+        #         json_cell = f"<span style='color:#ef4444;'>Error reading JSON: {html_escape.escape(str(e))}</span>"
         # else:
         #     json_cell = (
-        #         "<span style='color:#d97706; font-style:italic;'>Analysis"
+        #         "<span style='color:#f59e0b; font-size:12px;'>Analysis"
         #         " pending</span>"
         #     )
 
@@ -763,7 +753,10 @@ def init_storage():
     return ".", "images", "test_study.db"
 
 
-DATA_DIR, IMAGE_DIR, DB_FILE = init_storage()
+DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+IMAGE_DIR = os.getenv("IMAGE_DIR", "images")
+os.makedirs(IMAGE_DIR, exist_ok=True)
+DB_FILE = os.getenv("DB_FILE", "test_study.db")
 app.mount("/view-images", StaticFiles(directory=IMAGE_DIR), name="images")
 
 
@@ -800,6 +793,12 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists, safe to ignore
+
+    try:
+        c.execute("ALTER TABLE test_meal_logs ADD COLUMN analysis_json TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
     c.execute(
         """CREATE TABLE IF NOT EXISTS meal_nutrition (
@@ -902,6 +901,18 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             with open(output_filepath, "w", encoding="utf-8") as json_file:
                 json.dump(gemini_output, json_file, indent=2, ensure_ascii=False)
 
+            analysis_str = json.dumps(gemini_output, ensure_ascii=False)
+            if conn and meal_log_id:
+                c.execute(
+                    """
+                    UPDATE test_meal_logs 
+                    SET analysis_json = ? 
+                    WHERE id = ?
+                    """,
+                    (analysis_str, meal_log_id),
+                )
+                conn.commit()
+
             if conn and meal_log_id:
                 c.execute(
                     """
@@ -935,17 +946,6 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
         except Exception as e:
             print(f"--- GEMINI PROCESSING FAILED ---\n{e}")
-
-        # C. Insert into SQLite
-        # conn = sqlite3.connect(DB_FILE)
-        # c = conn.cursor()
-        # c.execute(
-        #     "INSERT INTO test_meal_logs (phone_number, timestamp, caption, image_path) VALUES (?, ?, ?, ?)",
-        #     (sender, datetime.now(), caption, filename),
-        # )
-        # conn.commit()
-        # conn.close()
-        # print(f"[Success] Saved meal from {sender} -> {filename}")
 
     except Exception as e:
         print(f"[Exception] Failed processing message from {sender}: {e}")
