@@ -528,52 +528,30 @@ def view_dashboard(
         else:
             img_html = "<span style='color:#94a3b8;'>Text Only</span>"
 
-        base_name, _ = os.path.splitext(img_path)
-        json_path = f"{base_name}_analysis.json"
-
-        if os.path.exists(json_path):
+        # JSON Analysis Cell
+        json_path = (
+            f"{os.path.splitext(img_path)[0]}_analysis.json"
+            if (img_path and img_path != "text_only")
+            else ""
+        )
+        if json_path and os.path.exists(json_path):
             try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    parsed_data = json.load(f)
-                    pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
-                    json_cell = f"""
+                with open(json_path, "r", encoding="utf-8") as jf:
+                    parsed_data = json.load(jf)
+                pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
+                json_cell = f"""
                     <details>
-                        <summary>View JSON</summary>
+                        <summary style="cursor:pointer; color:#2563eb; font-weight:600; font-size:13px;">▶ View JSON</summary>
                         <pre class="json-box">{pretty_json}</pre>
                     </details>
-                    """
-            except Exception as e:
-                json_cell = f"<span style='color:#ef4444;'>Error reading JSON: {html_escape.escape(str(e))}</span>"
+                """
+            except Exception as err:
+                json_cell = f"<span style='color:#ef4444;'>Error: {html_escape.escape(str(err))}</span>"
         else:
             json_cell = (
-                "<span style='color:#f59e0b; font-size:12px;'>Analysis"
+                "<span style='color:#d97706; font-style:italic;'>Analysis"
                 " pending</span>"
             )
-
-        # # JSON Analysis Cell
-        # json_path = (
-        #     f"{os.path.splitext(img_path)[0]}_analysis.json"
-        #     if (img_path and img_path != "text_only")
-        #     else ""
-        # )
-        # if json_path and os.path.exists(json_path):
-        #     try:
-        #         with open(json_path, "r", encoding="utf-8") as jf:
-        #             parsed_data = json.load(jf)
-        #         pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
-        #         json_cell = f"""
-        #             <details>
-        #                 <summary style="cursor:pointer; color:#2563eb; font-weight:600; font-size:13px;">▶ View JSON</summary>
-        #                 <pre class="json-box">{pretty_json}</pre>
-        #             </details>
-        #         """
-        #     except Exception as err:
-        #         json_cell = f"<span style='color:#ef4444;'>Error: {html_escape.escape(str(err))}</span>"
-        # else:
-        #     json_cell = (
-        #         "<span style='color:#d97706; font-style:italic;'>Analysis"
-        #         " pending</span>"
-        #     )
 
         meal_rows.append(
             f"""
