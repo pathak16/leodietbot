@@ -954,9 +954,9 @@ def get_default_meal_type(timestamp_str: str) -> str:
     t = dt.time()
     if dtime(7, 0) <= t < dtime(11, 30):
         return "Breakfast"
-    elif time(11, 30) <= t < time(15, 0):
+    elif dtime(11, 30) <= t < dtime(15, 0):
         return "Lunch"
-    elif time(15, 0) <= t < time(19, 0):
+    elif dtime(15, 0) <= t < dtime(19, 0):
         return "Snacks"
     else:
         return "Dinner"
