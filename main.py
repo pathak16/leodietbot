@@ -942,7 +942,12 @@ def get_default_meal_type(timestamp_str: str) -> str:
     19:00 - 07:00 -> Dinner
     """
     try:
-        dt = datetime.fromisoformat(timestamp_str)
+        if isinstance(timestamp_val, str):
+            dt = datetime.fromisoformat(timestamp_val)
+        elif isinstance(timestamp_val, (int, float)):
+            dt = datetime.fromtimestamp(timestamp_val)
+        else:
+            dt = timestamp_val
     except Exception:
         dt = datetime.now()
 
