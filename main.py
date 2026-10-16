@@ -932,7 +932,8 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         if conn:
             conn.close()
 
-    # def get_default_meal_type(timestamp_str: str) -> str:
+
+def get_default_meal_type(timestamp_str: str) -> str:
     """Categorises meal by time:
 
     07:00 - 11:30 -> Breakfast
@@ -953,51 +954,9 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
     t = dt.time()
     if dtime(7, 0) <= t < dtime(11, 30):
         return "Breakfast"
-    elif dtime(11, 30) <= t < dtime(15, 0):
+    elif time(11, 30) <= t < time(15, 0):
         return "Lunch"
-    elif dtime(15, 0) <= t < dtime(19, 0):
-        return "Snacks"
-    else:
-        return "Dinner"
-
-
-def get_default_meal_type(timestamp_val) -> str:
-    dt = None
-    if isinstance(timestamp_val, str):
-        # Handle ISO formats and standard SQLite space formats
-        clean_ts = timestamp_val.replace("T", " ")
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-        ):
-            try:
-                dt = datetime.strptime(clean_ts[:26], fmt)
-                break
-            except ValueError:
-                pass
-
-    elif isinstance(timestamp_val, (int, float)):
-        try:
-            dt = datetime.fromtimestamp(timestamp_val)
-        except Exception:
-            pass
-
-    # If all parsing fails, only then fallback
-    if not dt:
-        dt = datetime.now()
-
-    t = dt.time()
-
-    # 07:00 - 11:30 -> Breakfast
-    # 11:30 - 15:00 -> Lunch
-    # 15:00 - 19:00 -> Snacks
-    # Post 19:00    -> Dinner
-    if dtime(7, 0) <= t < dtime(11, 30):
-        return "Breakfast"
-    elif dtime(11, 30) <= t < dtime(15, 0):
-        return "Lunch"
-    elif dtime(15, 0) <= t < dtime(19, 0):
+    elif time(15, 0) <= t < time(19, 0):
         return "Snacks"
     else:
         return "Dinner"
