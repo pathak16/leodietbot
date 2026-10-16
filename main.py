@@ -12,6 +12,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import io
 from PIL import Image
 import html as html_escape
+from pydantic import BaseModel
+from datetime import datetime, time as dtime, timedelta
+import html as html_escape
+from fastapi import Request
+from fastapi.responses import HTMLResponse
 
 load_dotenv()
 
@@ -20,7 +25,6 @@ app = FastAPI(title="Dietary Study Bot")
 ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN")
-from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 HARDCODED_NUDGES = {
@@ -33,12 +37,324 @@ HARDCODED_NUDGES = {
 }
 
 
+class UpdateMealTypeRequest(BaseModel):
+    meal_log_id: int
+    meal_type: str
+
+
+@app.post("/admin/update-meal-type")
+def update_meal_type(req: UpdateMealTypeRequest):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE test_meal_logs SET meal_type = ? WHERE id = ?",
+        (req.meal_type, req.meal_log_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "success", "meal_type": req.meal_type}
+
+
+# @app.get("/admin/dashboard", response_class=HTMLResponse)
+# def view_dashboard(
+#     request: Request,
+#     phone_filter: str = "ALL",
+#     day_filter: str = "ALL",
+#     meal_filter: str = "ALL",
+# ):
+#     conn = sqlite3.connect(DB_FILE)
+#     c = conn.cursor()
+
+#     # 1. Fetch participants, day 1 anchor, and last interaction
+#     c.execute(
+#         """
+#         SELECT
+#             u.phone_number,
+#             u.start_timestamp,
+#             u.status,
+#             MIN(m.timestamp) AS first_interaction,
+#             MAX(m.timestamp) AS last_interaction
+#         FROM users u
+#         LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
+#         GROUP BY u.phone_number
+#         ORDER BY last_interaction DESC NULLS LAST
+#     """
+#     )
+#     users = c.fetchall()
+
+#     # 2. Fetch logged meals and drinks
+#     c.execute(
+#         "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs"
+#         " ORDER BY timestamp DESC"
+#     )
+#     logs = c.fetchall()
+#     conn.close()
+
+#     c.execute("SELECT phone_number, start_timestamp FROM users")
+#     user_starts = {}
+#     for u_phone, start_ts in c.fetchall():
+#         if start_ts:
+#             try:
+#                 user_starts[u_phone] = datetime.fromtimestamp(float(start_ts)).date()
+#             except Exception:
+#                 user_starts[u_phone] = datetime.now().date()
+
+#   # 2. Fetch distinct phone numbers for the filter dropdown
+#     c.execute(
+#         "SELECT DISTINCT phone_number FROM test_meal_logs ORDER BY phone_number"
+#     )
+#     all_phones = [row[0] for row in c.fetchall()]
+
+#     def parse_dt(val):
+#         if not val:
+#             return None
+#         if isinstance(val, (int, float)):
+#             return datetime.fromtimestamp(val)
+#         if isinstance(val, str):
+#             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+#                 try:
+#                     return datetime.strptime(val[:19], fmt)
+#                 except ValueError:
+#                     pass
+#         return None
+
+#     now = datetime.now()
+#     today_date = now.date()
+#     cutoff_24h = now - timedelta(hours=24)
+
+#     page_html = """<!DOCTYPE html>
+#     <html>
+#     <head>
+#         <title>Dietary Study Logs</title>
+#         <style>
+#             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; color: #1e293b; }
+#             h2 { margin-top: 32px; color: #0f172a; }
+#             table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }
+#             th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: top; }
+#             th { background: #0f172a; color: white; }
+#             img { border-radius: 6px; object-fit: cover; }
+#             .search-box {
+#                 width: 100%;
+#                 max-width: 400px;
+#                 padding: 10px 14px;
+#                 margin-bottom: 20px;
+#                 border: 1px solid #cbd5e1;
+#                 border-radius: 6px;
+#                 font-size: 14px;
+#                 outline: none;
+#                 box-sizing: border-box;
+#             }
+#             .search-box:focus {
+#                 border-color: #2563eb;
+#                 box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+#             }
+#             details summary {
+#                 cursor: pointer;
+#                 color: #2563eb;
+#                 font-weight: 600;
+#                 font-size: 13px;
+#                 outline: none;
+#             }
+#             details summary:hover {
+#                 text-decoration: underline;
+#             }
+#             pre.json-box {
+#                 background: #f1f5f9;
+#                 border: 1px solid #cbd5e1;
+#                 border-radius: 6px;
+#                 padding: 10px;
+#                 font-size: 11px;
+#                 white-space: pre-wrap;
+#                 word-break: break-word;
+#                 max-height: 250px;
+#                 overflow-y: auto;
+#                 margin-top: 8px;
+#             }
+#         </style>
+#     </head>
+#     <body>
+#         <h2>Registered Participants</h2>
+#         <input
+#             type="text"
+#             id="phoneSearch"
+#             class="search-box"
+#             placeholder="Search by phone number..."
+#             onkeyup="filterByPhone()"
+#         />
+#         <table id="participantsTable">
+#             <tr>
+#                 <th>Phone Number</th>
+#                 <th>Registered At</th>
+#                 <th>Study Day</th>
+#                 <th>Status</th>
+#                 <th>Last Interaction</th>
+#             </tr>
+#     """
+
+#     # Table 1: Participants
+#     for phone, start_ts, db_status, first_int, last_int in users:
+#         reg_dt = parse_dt(start_ts)
+#         first_dt = parse_dt(first_int)
+#         last_dt = parse_dt(last_int)
+
+#         reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
+#         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
+
+#         latest_activity = last_dt or reg_dt
+#         is_inactive = bool(latest_activity and latest_activity < cutoff_24h)
+
+#         if is_inactive:
+#             status_label = "inactive"
+#             badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
+#         else:
+#             status_label = "active"
+#             badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
+
+#         if first_dt:
+
+#             anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
+#             day_num = (anchor_date - first_dt.date()).days + 1
+
+#             if day_num > 15:
+#                 day_badge = (
+#                     "<span style='color:#64748b; font-weight:600;'>Completed Day"
+#                     f" {day_num}</span>"
+#                 )
+#             elif is_inactive:
+#                 day_badge = (
+#                     f"<span style='color:#ef4444; font-weight:700;'>Paused at Day"
+#                     f" {day_num}</span>"
+#                 )
+#             else:
+#                 day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
+#         else:
+#             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
+
+#         page_html += f"""
+#             <tr style="border-bottom: 1px solid #e2e8f0;">
+#                 <td style="padding:12px; font-family:monospace;">{phone}</td>
+#                 <td style="padding:12px; color:#475569;">{reg_str}</td>
+#                 <td style="padding:12px;">{day_badge}</td>
+#                 <td style="padding:12px;">
+#                     <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
+#                         {status_label}
+#                     </span>
+#                 </td>
+#                 <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
+#             </tr>
+#         """
+
+#     # Table 2: Food logs with photos and JSON preview
+#     page_html += """
+#         </table>
+
+#         <h2>Logged Meals & Drinks</h2>
+#         <table id="mealsTable">
+#             <tr>
+#                 <th>Phone Number</th>
+#                 <th>Timestamp</th>
+#                 <th>Note / Caption</th>
+#                 <th>Photo</th>
+#                 <th>Gemini Analysis</th>
+#             </tr>
+#     """
+
+#     for phone, ts, caption, img_path in logs:
+#         img_tag = "Text Only"
+#         json_cell = "<span style='color:#94a3b8;'>No photo</span>"
+
+#         if img_path and img_path != "text_only":
+#             img_filename = os.path.basename(img_path)
+#             img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
+
+#             # Locate companion analysis JSON
+#             base_name, _ = os.path.splitext(img_path)
+#             json_path = f"{base_name}_analysis.json"
+
+#             if os.path.exists(json_path):
+#                 try:
+#                     with open(json_path, "r", encoding="utf-8") as f:
+#                         parsed_data = json.load(f)
+#                     pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
+#                     json_cell = f"""
+#                     <details>
+#                         <summary>View JSON</summary>
+#                         <pre class="json-box">{pretty_json}</pre>
+#                     </details>
+#                     """
+#                 except Exception as e:
+#                     json_cell = f"<span style='color:#ef4444;'>Error reading JSON: {html_escape.escape(str(e))}</span>"
+#             else:
+#                 json_cell = (
+#                     "<span style='color:#f59e0b; font-size:12px;'>Analysis"
+#                     " pending</span>"
+#                 )
+
+#         log_dt = parse_dt(ts)
+#         log_str = log_dt.strftime("%Y-%m-%d %H:%M:%S") if log_dt else str(ts)
+#         note_str = caption or ""
+
+#         page_html += f"""
+#             <tr style="border-bottom: 1px solid #e2e8f0;">
+#                 <td style="padding:12px; font-family:monospace;">{phone}</td>
+#                 <td style="padding:12px; color:#475569;">{log_str}</td>
+#                 <td style="padding:12px;">{note_str}</td>
+#                 <td style="padding:12px;">{img_tag}</td>
+#                 <td style="padding:12px; width:350px;">{json_cell}</td>
+#             </tr>
+#         """
+
+#     page_html += """
+#         </table>
+
+#         <script>
+#         function filterByPhone() {
+#             var input = document.getElementById("phoneSearch");
+#             var filter = input.value.trim().toLowerCase();
+#             var tables = ["participantsTable", "mealsTable"];
+
+#             tables.forEach(function(tableId) {
+#                 var table = document.getElementById(tableId);
+#                 if (!table) return;
+#                 var tr = table.getElementsByTagName("tr");
+#                 for (var i = 1; i < tr.length; i++) {
+#                     var tdPhone = tr[i].getElementsByTagName("td")[0];
+#                     if (tdPhone) {
+#                         var phoneText = tdPhone.textContent || tdPhone.innerText;
+#                         if (phoneText.toLowerCase().indexOf(filter) > -1) {
+#                             tr[i].style.display = "";
+#                         } else {
+#                             tr[i].style.display = "none";
+#                         }
+#                     }
+#                 }
+#             });
+#         }
+#         </script>
+
+#     </body>
+#     </html>
+#     """
+#     return page_html
+
+
 @app.get("/admin/dashboard", response_class=HTMLResponse)
-def view_dashboard():
+def view_dashboard(
+    request: Request,
+    phone_filter: str = "ALL",
+    day_filter: str = "ALL",
+    meal_filter: str = "ALL",
+):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
 
+    now = datetime.now()
+    today_date = now.date()
+    cutoff_24h = now - timedelta(hours=24)
+
+    # -------------------------------------------------------------
     # 1. Fetch participants, day 1 anchor, and last interaction
+    # -------------------------------------------------------------
     c.execute(
         """
         SELECT 
@@ -50,106 +366,65 @@ def view_dashboard():
         FROM users u
         LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
         GROUP BY u.phone_number
-        ORDER BY last_interaction DESC NULLS LAST
+        ORDER BY last_interaction DESC
     """
     )
     users = c.fetchall()
 
-    # 2. Fetch logged meals and drinks
+    # Build user starts map for calculating day in meal logs
+    user_starts = {}
+    for u_phone, start_ts, _, first_int, _ in users:
+        if first_int:
+            try:
+                user_starts[u_phone] = datetime.fromisoformat(str(first_int)).date()
+            except Exception:
+                pass
+        if u_phone not in user_starts and start_ts:
+            try:
+                user_starts[u_phone] = datetime.fromtimestamp(float(start_ts)).date()
+            except Exception:
+                user_starts[u_phone] = today_date
+
+    # -------------------------------------------------------------
+    # 2. Fetch distinct phone numbers for the filter dropdown
+    # -------------------------------------------------------------
+    c.execute("SELECT DISTINCT phone_number FROM test_meal_logs ORDER BY phone_number")
+    all_phones = [row[0] for row in c.fetchall()]
+
+    # -------------------------------------------------------------
+    # 3. Fetch all meal logs
+    # -------------------------------------------------------------
     c.execute(
-        "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs"
-        " ORDER BY timestamp DESC"
+        "SELECT id, phone_number, timestamp, caption, image_path, meal_type FROM"
+        " test_meal_logs ORDER BY timestamp DESC"
     )
-    logs = c.fetchall()
+    raw_meals = c.fetchall()
     conn.close()
 
+    # -------------------------------------------------------------
+    # Helper to parse dates safely
+    # -------------------------------------------------------------
     def parse_dt(val):
         if not val:
             return None
         if isinstance(val, (int, float)):
             return datetime.fromtimestamp(val)
         if isinstance(val, str):
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S",
+            ):
                 try:
                     return datetime.strptime(val[:19], fmt)
                 except ValueError:
                     pass
         return None
 
-    now = datetime.now()
-    today_date = now.date()
-    cutoff_24h = now - timedelta(hours=24)
-
-    page_html = """<!DOCTYPE html>
-    <html>
-    <head>
-        <title>Dietary Study Logs</title>
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; color: #1e293b; }
-            h2 { margin-top: 32px; color: #0f172a; }
-            table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }
-            th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: top; }
-            th { background: #0f172a; color: white; }
-            img { border-radius: 6px; object-fit: cover; }
-            .search-box {
-                width: 100%;
-                max-width: 400px;
-                padding: 10px 14px;
-                margin-bottom: 20px;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                font-size: 14px;
-                outline: none;
-                box-sizing: border-box;
-            }
-            .search-box:focus {
-                border-color: #2563eb;
-                box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
-            }
-            details summary {
-                cursor: pointer;
-                color: #2563eb;
-                font-weight: 600;
-                font-size: 13px;
-                outline: none;
-            }
-            details summary:hover {
-                text-decoration: underline;
-            }
-            pre.json-box {
-                background: #f1f5f9;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 10px;
-                font-size: 11px;
-                white-space: pre-wrap;
-                word-break: break-word;
-                max-height: 250px;
-                overflow-y: auto;
-                margin-top: 8px;
-            }
-        </style>
-    </head>
-    <body>
-        <h2>Registered Participants</h2>
-        <input 
-            type="text" 
-            id="phoneSearch" 
-            class="search-box" 
-            placeholder="Search by phone number..." 
-            onkeyup="filterByPhone()"
-        />
-        <table id="participantsTable">
-            <tr>
-                <th>Phone Number</th>
-                <th>Registered At</th>
-                <th>Study Day</th>
-                <th>Status</th>
-                <th>Last Interaction</th>
-            </tr>
-    """
-
-    # Table 1: Participants
+    # -------------------------------------------------------------
+    # Build Table 1 Rows (Participants)
+    # -------------------------------------------------------------
+    participant_rows = []
     for phone, start_ts, db_status, first_int, last_int in users:
         reg_dt = parse_dt(start_ts)
         first_dt = parse_dt(first_int)
@@ -169,13 +444,12 @@ def view_dashboard():
             badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
 
         if first_dt:
-
             anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
             day_num = (anchor_date - first_dt.date()).days + 1
 
             if day_num > 15:
                 day_badge = (
-                    "<span style='color:#64748b; font-weight:600;'>Completed Day"
+                    f"<span style='color:#64748b; font-weight:600;'>Completed Day"
                     f" {day_num}</span>"
                 )
             elif is_inactive:
@@ -188,7 +462,8 @@ def view_dashboard():
         else:
             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
 
-        page_html += f"""
+        participant_rows.append(
+            f"""
             <tr style="border-bottom: 1px solid #e2e8f0;">
                 <td style="padding:12px; font-family:monospace;">{phone}</td>
                 <td style="padding:12px; color:#475569;">{reg_str}</td>
@@ -201,99 +476,241 @@ def view_dashboard():
                 <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
             </tr>
         """
+        )
 
-    # Table 2: Food logs with photos and JSON preview
-    page_html += """
+    # -------------------------------------------------------------
+    # Build Table 2 Rows (Meals)
+    # -------------------------------------------------------------
+    meal_rows = []
+    meal_options = ["Breakfast", "Lunch", "Snacks", "Dinner"]
+
+    for row in raw_meals:
+        m_id, phone, ts_str, caption, img_path, saved_type = row
+
+        # Calculate Study Day
+        try:
+            log_dt = datetime.fromisoformat(str(ts_str))
+            reg_date = user_starts.get(phone, log_dt.date())
+            calc_day = (log_dt.date() - reg_date).days + 1
+            calc_day = max(1, calc_day)
+            day_label = f"Day {calc_day}"
+        except Exception:
+            calc_day = 1
+            day_label = "Day 1"
+
+        current_meal_type = saved_type or get_default_meal_type(ts_str)
+
+        # Filter logic
+        if phone_filter != "ALL" and phone != phone_filter:
+            continue
+        if day_filter != "ALL" and str(calc_day) != str(day_filter).replace("Day ", ""):
+            continue
+        if meal_filter != "ALL" and current_meal_type.lower() != meal_filter.lower():
+            continue
+
+        # Build Meal Type Dropdown
+        dropdown_opts = "".join(
+            [
+                f"<option value='{opt}' {'selected' if opt.lower() == current_meal_type.lower() else ''}>{opt}</option>"
+                for opt in meal_options
+            ]
+        )
+        meal_type_select = f"""
+            <select class="type-select" onchange="saveMealType({m_id}, this)">
+                {dropdown_opts}
+            </select>
+        """
+
+        # Image Cell
+        if img_path and img_path != "text_only" and os.path.exists(img_path):
+            img_name = os.path.basename(img_path)
+            img_html = f"<a href='/view-images/{img_name}' target='_blank'><img src='/view-images/{img_name}' style='width:60px; height:60px; object-fit:cover; border-radius:6px; border:1px solid #cbd5e1;'></a>"
+        else:
+            img_html = "<span style='color:#94a3b8;'>Text Only</span>"
+
+        # JSON Analysis Cell
+        json_path = (
+            f"{os.path.splitext(img_path)[0]}_analysis.json"
+            if (img_path and img_path != "text_only")
+            else ""
+        )
+        if json_path and os.path.exists(json_path):
+            try:
+                with open(json_path, "r", encoding="utf-8") as jf:
+                    parsed_data = json.load(jf)
+                pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
+                json_cell = f"""
+                    <details>
+                        <summary style="cursor:pointer; color:#2563eb; font-weight:600; font-size:13px;">▶ View JSON</summary>
+                        <pre class="json-box">{pretty_json}</pre>
+                    </details>
+                """
+            except Exception as err:
+                json_cell = f"<span style='color:#ef4444;'>Error: {html_escape.escape(str(err))}</span>"
+        else:
+            json_cell = (
+                "<span style='color:#d97706; font-style:italic;'>Analysis"
+                " pending</span>"
+            )
+
+        meal_rows.append(
+            f"""
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding:12px; font-family:monospace;">{phone}</td>
+                <td style="padding:12px;"><span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:12px; font-weight:700; font-size:12px;">{day_label}</span></td>
+                <td style="padding:12px;">{meal_type_select}</td>
+                <td style="padding:12px; color:#64748b; font-size:13px;">{ts_str}</td>
+                <td style="padding:12px;">{html_escape.escape(caption or '')}</td>
+                <td style="padding:12px;">{img_html}</td>
+                <td style="padding:12px;">{json_cell}</td>
+            </tr>
+        """
+        )
+
+    # Filter dropdown options
+    phone_select_html = "".join(
+        [
+            f"<option value='{p}' {'selected' if phone_filter == p else ''}>{p}</option>"
+            for p in all_phones
+        ]
+    )
+    day_select_html = "".join(
+        [
+            f"<option value='{i}' {'selected' if day_filter == str(i) else ''}>Day {i}</option>"
+            for i in range(1, 16)
+        ]
+    )
+    meal_select_html = "".join(
+        [
+            f"<option value='{m}' {'selected' if meal_filter == m else ''}>{m}</option>"
+            for m in meal_options
+        ]
+    )
+
+    # -------------------------------------------------------------
+    # Complete Page HTML
+    # -------------------------------------------------------------
+    page_html = f"""<!DOCTYPE html>
+    <html>
+    <head>
+        <title>Dietary Study Dashboard</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; color: #1e293b; }}
+            h2 {{ margin-top: 32px; color: #0f172a; }}
+            table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }}
+            th, td {{ padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: middle; }}
+            th {{ background: #0f172a; color: white; }}
+            .filters {{ display: flex; gap: 14px; margin-bottom: 20px; align-items: center; background: white; padding: 14px 18px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+            .filters label {{ font-size: 13px; font-weight: 600; color: #475569; }}
+            .filters select {{ padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; background: white; }}
+            .filters button {{ background: #0f172a; color: white; border: none; padding: 7px 14px; border-radius: 4px; font-size: 13px; cursor: pointer; }}
+            .filters a {{ color: #64748b; font-size: 13px; text-decoration: none; margin-left: 6px; }}
+            .type-select {{ padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; background: white; cursor: pointer; }}
+            pre.json-box {{ background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 250px; overflow-y: auto; margin-top: 8px; }}
+            .search-box {{ width: 100%; max-width: 400px; padding: 10px 14px; margin-bottom: 20px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; outline: none; }}
+        </style>
+        <script>
+            function filterByPhone() {{
+                var input = document.getElementById("phoneSearch");
+                var filter = input.value.toUpperCase();
+                var table = document.getElementById("participantsTable");
+                var tr = table.getElementsByTagName("tr");
+                for (var i = 1; i < tr.length; i++) {{
+                    var td = tr[i].getElementsByTagName("td")[0];
+                    if (td) {{
+                        var txtValue = td.textContent || td.innerText;
+                        tr[i].style.display = txtValue.toUpperCase().indexOf(filter) > -1 ? "" : "none";
+                    }}
+                }}
+            }}
+
+            async function saveMealType(mealId, selectElement) {{
+                selectElement.style.borderColor = "#2563eb";
+                try {{
+                    const res = await fetch('/admin/update-meal-type', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ meal_log_id: mealId, meal_type: selectElement.value }})
+                    }});
+                    if (res.ok) {{
+                        selectElement.style.borderColor = "#22c55e";
+                        setTimeout(() => selectElement.style.borderColor = "#cbd5e1", 1500);
+                    }} else {{
+                        alert('Could not update meal type.');
+                        selectElement.style.borderColor = "#ef4444";
+                    }}
+                }} catch (e) {{
+                    alert('Network error updating meal type: ' + e);
+                    selectElement.style.borderColor = "#ef4444";
+                }}
+            }}
+        </script>
+    </head>
+    <body>
+        <h2>Registered Participants</h2>
+        <input type="text" id="phoneSearch" class="search-box" placeholder="Search by phone number..." onkeyup="filterByPhone()" />
+        <table id="participantsTable">
+            <thead>
+                <tr>
+                    <th>Phone Number</th>
+                    <th>Registered At</th>
+                    <th>Study Day</th>
+                    <th>Status</th>
+                    <th>Last Interaction</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(participant_rows)}
+            </tbody>
         </table>
 
         <h2>Logged Meals & Drinks</h2>
+        <form method="get" action="/admin/dashboard" class="filters">
+            <label>Phone:
+                <select name="phone_filter">
+                    <option value="ALL">All Participants</option>
+                    {phone_select_html}
+                </select>
+            </label>
+
+            <label>Day:
+                <select name="day_filter">
+                    <option value="ALL">All Days</option>
+                    {day_select_html}
+                </select>
+            </label>
+
+            <label>Meal Type:
+                <select name="meal_filter">
+                    <option value="ALL">All Types</option>
+                    {meal_select_html}
+                </select>
+            </label>
+
+            <button type="submit">Apply Filter</button>
+            <a href="/admin/dashboard">Reset</a>
+        </form>
+        
         <table id="mealsTable">
-            <tr>
-                <th>Phone Number</th>
-                <th>Timestamp</th>
-                <th>Note / Caption</th>
-                <th>Photo</th>
-                <th>Gemini Analysis</th>
-            </tr>
-    """
-
-    for phone, ts, caption, img_path in logs:
-        img_tag = "Text Only"
-        json_cell = "<span style='color:#94a3b8;'>No photo</span>"
-
-        if img_path and img_path != "text_only":
-            img_filename = os.path.basename(img_path)
-            img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
-
-            # Locate companion analysis JSON
-            base_name, _ = os.path.splitext(img_path)
-            json_path = f"{base_name}_analysis.json"
-
-            if os.path.exists(json_path):
-                try:
-                    with open(json_path, "r", encoding="utf-8") as f:
-                        parsed_data = json.load(f)
-                    pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
-                    json_cell = f"""
-                    <details>
-                        <summary>View JSON</summary>
-                        <pre class="json-box">{pretty_json}</pre>
-                    </details>
-                    """
-                except Exception as e:
-                    json_cell = f"<span style='color:#ef4444;'>Error reading JSON: {html_escape.escape(str(e))}</span>"
-            else:
-                json_cell = (
-                    "<span style='color:#f59e0b; font-size:12px;'>Analysis"
-                    " pending</span>"
-                )
-
-        log_dt = parse_dt(ts)
-        log_str = log_dt.strftime("%Y-%m-%d %H:%M:%S") if log_dt else str(ts)
-        note_str = caption or ""
-
-        page_html += f"""
-            <tr style="border-bottom: 1px solid #e2e8f0;">
-                <td style="padding:12px; font-family:monospace;">{phone}</td>
-                <td style="padding:12px; color:#475569;">{log_str}</td>
-                <td style="padding:12px;">{note_str}</td>
-                <td style="padding:12px;">{img_tag}</td>
-                <td style="padding:12px; width:350px;">{json_cell}</td>
-            </tr>
-        """
-
-    page_html += """
+            <thead>
+                <tr>
+                    <th>Phone Number</th>
+                    <th>Day</th>
+                    <th>Meal Type</th>
+                    <th>Timestamp</th>
+                    <th>Note / Caption</th>
+                    <th>Photo</th>
+                    <th>Analysis</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(meal_rows)}
+            </tbody>
         </table>
-
-        <script>
-        function filterByPhone() {
-            var input = document.getElementById("phoneSearch");
-            var filter = input.value.trim().toLowerCase();
-            var tables = ["participantsTable", "mealsTable"];
-            
-            tables.forEach(function(tableId) {
-                var table = document.getElementById(tableId);
-                if (!table) return;
-                var tr = table.getElementsByTagName("tr");
-                for (var i = 1; i < tr.length; i++) {
-                    var tdPhone = tr[i].getElementsByTagName("td")[0];
-                    if (tdPhone) {
-                        var phoneText = tdPhone.textContent || tdPhone.innerText;
-                        if (phoneText.toLowerCase().indexOf(filter) > -1) {
-                            tr[i].style.display = "";
-                        } else {
-                            tr[i].style.display = "none";
-                        }
-                    }
-                }
-            });
-        }
-        </script>
-    
     </body>
-    </html>
-    """
-    return page_html
+    </html>"""
+
+    return HTMLResponse(page_html)
 
 
 def init_storage():
@@ -356,6 +773,12 @@ def init_db():
     """
     )
 
+    try:
+        c.execute("ALTER TABLE test_meal_logs ADD COLUMN meal_type TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists, safe to ignore
+
     c.execute(
         """CREATE TABLE IF NOT EXISTS meal_nutrition (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -389,7 +812,7 @@ def init_db():
 init_db()
 
 
-# 3. Worker to download media, save to disk, record in DB, and reply
+# 2. Worker to download media, save to disk, record in DB, and reply
 def process_incoming_meal(media_id: str, sender: str, caption: str):
     conn = None
     headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
@@ -509,49 +932,29 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
         if conn:
             conn.close()
 
-    # 4. Real-time Gemini Processing Pipeline
-    # # try:
-    # #     print(f"[Gemini] Analyzing image for meal #({sender})...")
-    # #     analysis = run_gemini_vision_pipeline(filename, caption)
 
-    # #     c.execute(
-    # #         """
-    # #             INSERT INTO meal_nutrition (
-    # #                 meal_log_id, phone_number, identified_items, meal_type,
-    # #                 food_source_type, staple_format, protein_grams, carbs_grams,
-    # #                 fat_grams, fiber_grams, protein_source_present, protein_source_type,
-    # #                 is_caffeine_or_sugar_crutch, primary_fuel_source, crash_risk_level, raw_json
-    # #             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    # #         """,
-    # #         (
-    # #             meal_log_id,
-    # #             sender,
-    # #             json.dumps(analysis.get("identified_items", [])),
-    # #             analysis.get("meal_type"),
-    # #             analysis.get("food_source_type"),
-    # #             analysis.get("staple_format"),
-    # #             analysis.get("estimated_protein_grams", 0.0),
-    # #             analysis.get("estimated_carbs_grams", 0.0),
-    # #             analysis.get("estimated_fat_grams", 0.0),
-    # #             analysis.get("estimated_fiber_grams", 0.0),
-    # #             analysis.get("protein_source_present", False),
-    # #             analysis.get("protein_source_type"),
-    # #             analysis.get("is_caffeine_or_sugar_crutch", False),
-    # #             analysis.get("primary_fuel_source"),
-    # #             analysis.get("crash_risk_level"),
-    # #             json.dumps(analysis),
-    # #         ),
-    # #     )
-    # #     conn.commit()
-    # #     print(
-    # #         f"[Gemini] Success: {analysis.get('identified_items')} | Protein:"
-    # #         f" {analysis.get('estimated_protein_grams')}g | Fuel:"
-    # #         f" {analysis.get('primary_fuel_source')}"
-    # #     )
-    # except Exception as e:
-    #     print(f"[Gemini Error] Processing failed for meal: {e}")
-    # finally:
-    #     conn.close()
+def get_default_meal_type(timestamp_str: str) -> str:
+    """Categorises meal by time:
+
+    07:00 - 11:30 -> Breakfast
+    11:30 - 15:00 -> Lunch
+    15:00 - 19:00 -> Snacks
+    19:00 - 07:00 -> Dinner
+    """
+    try:
+        dt = datetime.fromisoformat(timestamp_str)
+    except Exception:
+        dt = datetime.now()
+
+    t = dt.time()
+    if time(7, 0) <= t < time(11, 30):
+        return "Breakfast"
+    elif time(11, 30) <= t < time(15, 0):
+        return "Lunch"
+    elif time(15, 0) <= t < time(19, 0):
+        return "Snacks"
+    else:
+        return "Dinner"
 
 
 # 4. Meta Webhook Handshake Verification (GET)
