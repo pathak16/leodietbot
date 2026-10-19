@@ -484,7 +484,7 @@ def init_db():
     except sqlite3.OperationalError:
         pass  # Column already exists, safe to ignore
 
-    c.execute("UPDATE users SET dropoff_sent = 0 WHERE phone_number = ?", (sender,))
+    # c.execute("UPDATE users SET dropoff_sent = 0 WHERE phone_number = ?", (sender,))
 
     c.execute(
         """
