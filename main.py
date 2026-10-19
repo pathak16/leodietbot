@@ -55,289 +55,6 @@ def update_meal_type(req: UpdateMealTypeRequest):
     return {"status": "success", "meal_type": req.meal_type}
 
 
-# @app.get("/admin/dashboard", response_class=HTMLResponse)
-# def view_dashboard(
-#     request: Request,
-#     phone_filter: str = "ALL",
-#     day_filter: str = "ALL",
-#     meal_filter: str = "ALL",
-# ):
-#     conn = sqlite3.connect(DB_FILE)
-#     c = conn.cursor()
-
-#     # 1. Fetch participants, day 1 anchor, and last interaction
-#     c.execute(
-#         """
-#         SELECT
-#             u.phone_number,
-#             u.start_timestamp,
-#             u.status,
-#             MIN(m.timestamp) AS first_interaction,
-#             MAX(m.timestamp) AS last_interaction
-#         FROM users u
-#         LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
-#         GROUP BY u.phone_number
-#         ORDER BY last_interaction DESC NULLS LAST
-#     """
-#     )
-#     users = c.fetchall()
-
-#     # 2. Fetch logged meals and drinks
-#     c.execute(
-#         "SELECT phone_number, timestamp, caption, image_path FROM test_meal_logs"
-#         " ORDER BY timestamp DESC"
-#     )
-#     logs = c.fetchall()
-#     conn.close()
-
-#     c.execute("SELECT phone_number, start_timestamp FROM users")
-#     user_starts = {}
-#     for u_phone, start_ts in c.fetchall():
-#         if start_ts:
-#             try:
-#                 user_starts[u_phone] = datetime.fromtimestamp(float(start_ts)).date()
-#             except Exception:
-#                 user_starts[u_phone] = datetime.now().date()
-
-#   # 2. Fetch distinct phone numbers for the filter dropdown
-#     c.execute(
-#         "SELECT DISTINCT phone_number FROM test_meal_logs ORDER BY phone_number"
-#     )
-#     all_phones = [row[0] for row in c.fetchall()]
-
-#     def parse_dt(val):
-#         if not val:
-#             return None
-#         if isinstance(val, (int, float)):
-#             return datetime.fromtimestamp(val)
-#         if isinstance(val, str):
-#             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
-#                 try:
-#                     return datetime.strptime(val[:19], fmt)
-#                 except ValueError:
-#                     pass
-#         return None
-
-#     now = datetime.now()
-#     today_date = now.date()
-#     cutoff_24h = now - timedelta(hours=24)
-
-#     page_html = """<!DOCTYPE html>
-#     <html>
-#     <head>
-#         <title>Dietary Study Logs</title>
-#         <style>
-#             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f8fafc; color: #1e293b; }
-#             h2 { margin-top: 32px; color: #0f172a; }
-#             table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 24px; }
-#             th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: top; }
-#             th { background: #0f172a; color: white; }
-#             img { border-radius: 6px; object-fit: cover; }
-#             .search-box {
-#                 width: 100%;
-#                 max-width: 400px;
-#                 padding: 10px 14px;
-#                 margin-bottom: 20px;
-#                 border: 1px solid #cbd5e1;
-#                 border-radius: 6px;
-#                 font-size: 14px;
-#                 outline: none;
-#                 box-sizing: border-box;
-#             }
-#             .search-box:focus {
-#                 border-color: #2563eb;
-#                 box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
-#             }
-#             details summary {
-#                 cursor: pointer;
-#                 color: #2563eb;
-#                 font-weight: 600;
-#                 font-size: 13px;
-#                 outline: none;
-#             }
-#             details summary:hover {
-#                 text-decoration: underline;
-#             }
-#             pre.json-box {
-#                 background: #f1f5f9;
-#                 border: 1px solid #cbd5e1;
-#                 border-radius: 6px;
-#                 padding: 10px;
-#                 font-size: 11px;
-#                 white-space: pre-wrap;
-#                 word-break: break-word;
-#                 max-height: 250px;
-#                 overflow-y: auto;
-#                 margin-top: 8px;
-#             }
-#         </style>
-#     </head>
-#     <body>
-#         <h2>Registered Participants</h2>
-#         <input
-#             type="text"
-#             id="phoneSearch"
-#             class="search-box"
-#             placeholder="Search by phone number..."
-#             onkeyup="filterByPhone()"
-#         />
-#         <table id="participantsTable">
-#             <tr>
-#                 <th>Phone Number</th>
-#                 <th>Registered At</th>
-#                 <th>Study Day</th>
-#                 <th>Status</th>
-#                 <th>Last Interaction</th>
-#             </tr>
-#     """
-
-#     # Table 1: Participants
-#     for phone, start_ts, db_status, first_int, last_int in users:
-#         reg_dt = parse_dt(start_ts)
-#         first_dt = parse_dt(first_int)
-#         last_dt = parse_dt(last_int)
-
-#         reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
-#         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
-
-#         latest_activity = last_dt or reg_dt
-#         is_inactive = bool(latest_activity and latest_activity < cutoff_24h)
-
-#         if is_inactive:
-#             status_label = "inactive"
-#             badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
-#         else:
-#             status_label = "active"
-#             badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
-
-#         if first_dt:
-
-#             anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
-#             day_num = (anchor_date - first_dt.date()).days + 1
-
-#             if day_num > 15:
-#                 day_badge = (
-#                     "<span style='color:#64748b; font-weight:600;'>Completed Day"
-#                     f" {day_num}</span>"
-#                 )
-#             elif is_inactive:
-#                 day_badge = (
-#                     f"<span style='color:#ef4444; font-weight:700;'>Paused at Day"
-#                     f" {day_num}</span>"
-#                 )
-#             else:
-#                 day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
-#         else:
-#             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-
-#         page_html += f"""
-#             <tr style="border-bottom: 1px solid #e2e8f0;">
-#                 <td style="padding:12px; font-family:monospace;">{phone}</td>
-#                 <td style="padding:12px; color:#475569;">{reg_str}</td>
-#                 <td style="padding:12px;">{day_badge}</td>
-#                 <td style="padding:12px;">
-#                     <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
-#                         {status_label}
-#                     </span>
-#                 </td>
-#                 <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
-#             </tr>
-#         """
-
-#     # Table 2: Food logs with photos and JSON preview
-#     page_html += """
-#         </table>
-
-#         <h2>Logged Meals & Drinks</h2>
-#         <table id="mealsTable">
-#             <tr>
-#                 <th>Phone Number</th>
-#                 <th>Timestamp</th>
-#                 <th>Note / Caption</th>
-#                 <th>Photo</th>
-#                 <th>Gemini Analysis</th>
-#             </tr>
-#     """
-
-#     for phone, ts, caption, img_path in logs:
-#         img_tag = "Text Only"
-#         json_cell = "<span style='color:#94a3b8;'>No photo</span>"
-
-#         if img_path and img_path != "text_only":
-#             img_filename = os.path.basename(img_path)
-#             img_tag = f"<a href='/view-images/{img_filename}' target='_blank'><img src='/view-images/{img_filename}' width='100' height='100' /></a>"
-
-#             # Locate companion analysis JSON
-#             base_name, _ = os.path.splitext(img_path)
-#             json_path = f"{base_name}_analysis.json"
-
-#             if os.path.exists(json_path):
-#                 try:
-#                     with open(json_path, "r", encoding="utf-8") as f:
-#                         parsed_data = json.load(f)
-#                     pretty_json = html_escape.escape(json.dumps(parsed_data, indent=2))
-#                     json_cell = f"""
-#                     <details>
-#                         <summary>View JSON</summary>
-#                         <pre class="json-box">{pretty_json}</pre>
-#                     </details>
-#                     """
-#                 except Exception as e:
-#                     json_cell = f"<span style='color:#ef4444;'>Error reading JSON: {html_escape.escape(str(e))}</span>"
-#             else:
-#                 json_cell = (
-#                     "<span style='color:#f59e0b; font-size:12px;'>Analysis"
-#                     " pending</span>"
-#                 )
-
-#         log_dt = parse_dt(ts)
-#         log_str = log_dt.strftime("%Y-%m-%d %H:%M:%S") if log_dt else str(ts)
-#         note_str = caption or ""
-
-#         page_html += f"""
-#             <tr style="border-bottom: 1px solid #e2e8f0;">
-#                 <td style="padding:12px; font-family:monospace;">{phone}</td>
-#                 <td style="padding:12px; color:#475569;">{log_str}</td>
-#                 <td style="padding:12px;">{note_str}</td>
-#                 <td style="padding:12px;">{img_tag}</td>
-#                 <td style="padding:12px; width:350px;">{json_cell}</td>
-#             </tr>
-#         """
-
-#     page_html += """
-#         </table>
-
-#         <script>
-#         function filterByPhone() {
-#             var input = document.getElementById("phoneSearch");
-#             var filter = input.value.trim().toLowerCase();
-#             var tables = ["participantsTable", "mealsTable"];
-
-#             tables.forEach(function(tableId) {
-#                 var table = document.getElementById(tableId);
-#                 if (!table) return;
-#                 var tr = table.getElementsByTagName("tr");
-#                 for (var i = 1; i < tr.length; i++) {
-#                     var tdPhone = tr[i].getElementsByTagName("td")[0];
-#                     if (tdPhone) {
-#                         var phoneText = tdPhone.textContent || tdPhone.innerText;
-#                         if (phoneText.toLowerCase().indexOf(filter) > -1) {
-#                             tr[i].style.display = "";
-#                         } else {
-#                             tr[i].style.display = "none";
-#                         }
-#                     }
-#                 }
-#             });
-#         }
-#         </script>
-
-#     </body>
-#     </html>
-#     """
-#     return page_html
-
-
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 def view_dashboard(
     request: Request,
@@ -761,6 +478,14 @@ def init_db():
     """
     )
 
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN dropoff_sent INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists, safe to ignore
+
+    c.execute("UPDATE users SET dropoff_sent = 0 WHERE phone_number = ?", (sender,))
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS test_meal_logs (
@@ -1139,6 +864,52 @@ def push_text_nudge(phone_number, nudge_key):
         print(f"[API Error] Meta rejected nudge to {phone_number}: {res.text}")
 
 
+# def send_dropoff_template(phone_number: str, first_name: str = None) -> bool:
+#     """Sends the approved Meta template to re-engage an inactive user."""
+#     endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+#     headers = {
+#         "Authorization": f"Bearer {ACCESS_TOKEN}",
+#         "Content-Type": "application/json",
+#     }
+
+#     # Build components if your template has a {{1}} variable for the name
+#     components = []
+#     if first_name:
+#         components.append(
+#             {
+#                 "type": "body",
+#                 "parameters": [{"type": "text", "text": first_name}],
+#             }
+#         )
+
+#     payload = {
+#         "messaging_product": "whatsapp",
+#         "to": phone_number,
+#         "type": "template",
+#         "template": {
+#             "name": "dropoff_1",
+#             "language": {"code": "en"},
+#         },
+#     }
+
+#     if components:
+#         payload["template"]["components"] = components
+
+#     try:
+#         res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+#         if res.status_code == 200:
+#             print(f"[Drop-Off Nudge] Successfully sent to {phone_number}")
+#             return True
+#         else:
+#             print(
+#                 f"[Drop-Off Nudge Error] Meta rejected {phone_number}: {res.status_code} - {res.text}"
+#             )
+#             return False
+#     except Exception as e:
+#         print(f"[Drop-Off Exception] Error sending to {phone_number}: {e}")
+#         return False
+
+
 def run_fixed_reminders(nudge_key):
     """Fires at exact times regardless of user activity."""
     print(f"[Scheduler] Executing fixed blast: {nudge_key}")
@@ -1260,3 +1031,42 @@ def start_scheduler():
 
     scheduler.start()
     print("[System] Background scheduler initialized on IST time.")
+
+
+# @app.get("/admin/trigger-dropoffs")
+# def trigger_dropoffs_now():
+#     sent = check_and_send_dropoffs()
+#     return {"status": "success", "dropoffs_sent": sent}
+
+
+@app.get("/admin/test-template")
+def test_template_ping(phone: str, first_name: str = "Test", template_name: str = None):
+    """Usage: /admin/test-template?phone=919326841356&template_name=your_approved_name"""
+    t_name = template_name or "dropoff_1"
+
+    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "template",
+        "template": {
+            "name": t_name,
+            "language": {"code": "en"},  # Adjust to en_US if configured that way
+        },
+    }
+
+    res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+
+    return {
+        "status_code": res.status_code,
+        "meta_response": (
+            res.json()
+            if res.headers.get("content-type") == "application/json"
+            else res.text
+        ),
+    }
