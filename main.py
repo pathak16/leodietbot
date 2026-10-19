@@ -1070,3 +1070,32 @@ def test_template_ping(phone: str, first_name: str = "Test", template_name: str 
             else res.text
         ),
     }
+
+
+@app.get("/admin/preview-inactive")
+def preview_inactive():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    now = datetime.now()
+    cutoff_24h = (now - timedelta(hours=24)).isoformat()
+
+    c.execute(
+        """
+        SELECT 
+            phone_number,
+            MAX(timestamp) AS last_log
+        FROM test_meal_logs
+        GROUP BY phone_number
+        HAVING last_log < ?
+    """,
+        (cutoff_24h,),
+    )
+
+    results = c.fetchall()
+    conn.close()
+
+    return {
+        "inactive_count": len(results),
+        "inactive_participants": [{"phone": r[0], "last_log": r[1]} for r in results],
+    }
