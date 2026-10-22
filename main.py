@@ -55,6 +55,49 @@ def update_meal_type(req: UpdateMealTypeRequest):
     return {"status": "success", "meal_type": req.meal_type}
 
 
+@app.get("/admin/delete-participant")
+def delete_participant(phone: str):
+    """Usage in browser:
+
+    https://leodietbot-production.up.railway.app/admin/delete-participant?phone=919567798884
+    """
+    clean_phone = phone.strip().replace("+", "")
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # 1. Delete associated nutrition records (if any)
+    try:
+        c.execute("DELETE FROM meal_nutrition WHERE phone_number = ?", (clean_phone,))
+        nutrition_deleted = c.rowcount
+    except sqlite3.OperationalError:
+        nutrition_deleted = 0
+
+    # 2. Delete logged meals
+    c.execute("DELETE FROM test_meal_logs WHERE phone_number = ?", (clean_phone,))
+    meals_deleted = c.rowcount
+
+    # 3. Delete from users table
+    try:
+        c.execute("DELETE FROM users WHERE phone_number = ?", (clean_phone,))
+        users_deleted = c.rowcount
+    except sqlite3.OperationalError:
+        users_deleted = 0
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "success",
+        "deleted_phone": clean_phone,
+        "deleted_records": {
+            "meals": meals_deleted,
+            "users": users_deleted,
+            "meal_nutrition": nutrition_deleted,
+        },
+    }
+
+
 @app.get("/admin/dashboard", response_class=HTMLResponse)
 def view_dashboard(
     request: Request,
@@ -77,12 +120,11 @@ def view_dashboard(
         SELECT 
             u.phone_number,
             u.start_timestamp,
-            u.status,
+            'active' AS status,
             MIN(m.timestamp) AS first_interaction,
             MAX(m.timestamp) AS last_interaction
-        FROM users u
-        LEFT JOIN test_meal_logs m ON u.phone_number = m.phone_number
-        GROUP BY u.phone_number
+        FROM test_meal_logs m
+        GROUP BY m.phone_number
         ORDER BY last_interaction DESC
     """
     )
