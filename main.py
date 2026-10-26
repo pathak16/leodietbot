@@ -3,7 +3,6 @@ import json
 import time
 from analysis import run_gemini_vision_pipeline
 import sqlite3
-from datetime import datetime, timedelta
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Response, BackgroundTasks
@@ -11,11 +10,9 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 import io
 from PIL import Image
-import html as html_escape
 from pydantic import BaseModel
 from datetime import datetime, time as dtime, timedelta
 import html as html_escape
-from fastapi import Request
 from fastapi.responses import HTMLResponse
 
 load_dotenv()
@@ -35,6 +32,85 @@ HARDCODED_NUDGES = {
     "dinner_nudge_1": "What's for dinner?",
     "dinner_nudge_2": "If it's taking this long, it has to be something yummy. How dare you hide!?",
 }
+
+COMPLETION_MESSAGE = (
+    "🏁 You made it! Day 15 is officially in the books.\n\n"
+    "Thank you so much for letting us into your daily routine over the past two weeks. "
+    "You can now eat your next meal without having to snap a photo first! 😝 "
+    "\n\nAn exciting gift is on it's way, stay tuned!"
+)
+
+
+def check_and_send_completion(sender: str):
+    """
+    Evaluates if a participant has completed 15 study days.
+    If yes, and they haven't been notified yet, sends the celebratory message.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    # 1. Check if user was already congratulated
+    c.execute("SELECT completed_notified FROM users WHERE phone_number = ?", (sender,))
+    row = c.fetchone()
+    if row and row[0] == 1:
+        conn.close()
+        return
+
+    # 2. Get the earliest meal timestamp for this sender
+    c.execute(
+        "SELECT MIN(timestamp) FROM test_meal_logs WHERE phone_number = ?", (sender,)
+    )
+    first_log_row = c.fetchone()
+
+    if not first_log_row or not first_log_row[0]:
+        conn.close()
+        return
+
+    first_log_str = str(first_log_row[0]).replace("T", " ")[:10]
+    first_dt = datetime.strptime(first_log_str, "%Y-%m-%d").date()
+    today_dt = datetime.now().date()
+
+    # 3. Calculate study day reached
+    study_day = (today_dt - first_dt).days + 1
+
+    if study_day >= 15:
+        # 4. Send hardcoded congratulatory message (free-form raw text)
+        ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+        headers = {
+            "Authorization": f"Bearer {ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": sender,
+            "type": "text",
+            "text": {"body": COMPLETION_MESSAGE},
+        }
+
+        try:
+            res = requests.post(ack_endpoint, headers=headers, json=payload, timeout=10)
+            if res.status_code == 200:
+                # 5. Mark as completed in users table
+                c.execute(
+                    """
+                    INSERT INTO users (phone_number, completed_notified, status)
+                    VALUES (?, 1, 'completed')
+                    ON CONFLICT(phone_number) DO UPDATE SET completed_notified = 1, status = 'completed'
+                """,
+                    (sender,),
+                )
+                conn.commit()
+                print(
+                    f"[Graduation] Successfully sent Day 15 completion message to {sender}"
+                )
+            else:
+                print(
+                    f"[Graduation Error] Meta rejected message to {sender}: {res.text}"
+                )
+        except Exception as e:
+            print(f"[Graduation Exception] Error sending to {sender}: {e}")
+
+    conn.close()
 
 
 class UpdateMealTypeRequest(BaseModel):
@@ -206,10 +282,12 @@ def view_dashboard(
             anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
             day_num = (anchor_date - first_dt.date()).days + 1
 
-            if day_num > 15:
-                day_badge = (
-                    f"<span style='color:#64748b; font-weight:600;'>Completed Day"
-                    f" {day_num}</span>"
+            if day_num >= 15:
+                # Freeze at Day 15 and mark status as Completed
+                day_badge = "<span style='color:#16a34a; font-weight:700;'>Completed (Day 15)</span>"
+                status_label = "completed"
+                badge_style = (
+                    "background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;"
                 )
             elif is_inactive:
                 day_badge = (
@@ -220,7 +298,6 @@ def view_dashboard(
                 day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
         else:
             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-
         participant_rows.append(
             f"""
             <tr style="border-bottom: 1px solid #e2e8f0;">
@@ -250,8 +327,8 @@ def view_dashboard(
         try:
             log_dt = datetime.fromisoformat(str(ts_str))
             reg_date = user_starts.get(phone, log_dt.date())
-            calc_day = (log_dt.date() - reg_date).days + 1
-            calc_day = max(1, calc_day)
+            raw_calc_day = (log_dt.date() - reg_date).days + 1
+            calc_day = max(1, min(15, raw_calc_day))
             day_label = f"Day {calc_day}"
         except Exception:
             calc_day = 1
@@ -572,6 +649,11 @@ def init_db():
     """
     )
 
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN completed_notified INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -629,6 +711,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             "text": {"body": "Logged! 📸 Meal recorded."},
         }
         requests.post(ack_endpoint, headers=headers, json=payload)
+        check_and_send_completion(sender)
 
         # --- GEMINI PROCESSING TEST ---
         print(f"[Test] Sending {filename} to Gemini...")
@@ -906,50 +989,50 @@ def push_text_nudge(phone_number, nudge_key):
         print(f"[API Error] Meta rejected nudge to {phone_number}: {res.text}")
 
 
-# def send_dropoff_template(phone_number: str, first_name: str = None) -> bool:
-#     """Sends the approved Meta template to re-engage an inactive user."""
-#     endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-#     headers = {
-#         "Authorization": f"Bearer {ACCESS_TOKEN}",
-#         "Content-Type": "application/json",
-#     }
+def send_dropoff_template(phone_number: str, first_name: str = None) -> bool:
+    """Sends the approved Meta template to re-engage an inactive user."""
+    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
 
-#     # Build components if your template has a {{1}} variable for the name
-#     components = []
-#     if first_name:
-#         components.append(
-#             {
-#                 "type": "body",
-#                 "parameters": [{"type": "text", "text": first_name}],
-#             }
-#         )
+    # Build components if your template has a {{1}} variable for the name
+    components = []
+    if first_name:
+        components.append(
+            {
+                "type": "body",
+                "parameters": [{"type": "text", "text": first_name}],
+            }
+        )
 
-#     payload = {
-#         "messaging_product": "whatsapp",
-#         "to": phone_number,
-#         "type": "template",
-#         "template": {
-#             "name": "dropoff_1",
-#             "language": {"code": "en"},
-#         },
-#     }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "template",
+        "template": {
+            "name": "dropoff_1",
+            "language": {"code": "en"},
+        },
+    }
 
-#     if components:
-#         payload["template"]["components"] = components
+    if components:
+        payload["template"]["components"] = components
 
-#     try:
-#         res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
-#         if res.status_code == 200:
-#             print(f"[Drop-Off Nudge] Successfully sent to {phone_number}")
-#             return True
-#         else:
-#             print(
-#                 f"[Drop-Off Nudge Error] Meta rejected {phone_number}: {res.status_code} - {res.text}"
-#             )
-#             return False
-#     except Exception as e:
-#         print(f"[Drop-Off Exception] Error sending to {phone_number}: {e}")
-#         return False
+    try:
+        res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200:
+            print(f"[Drop-Off Nudge] Successfully sent to {phone_number}")
+            return True
+        else:
+            print(
+                f"[Drop-Off Nudge Error] Meta rejected {phone_number}: {res.status_code} - {res.text}"
+            )
+            return False
+    except Exception as e:
+        print(f"[Drop-Off Exception] Error sending to {phone_number}: {e}")
+        return False
 
 
 def run_fixed_reminders(nudge_key):
@@ -1075,69 +1158,7 @@ def start_scheduler():
     print("[System] Background scheduler initialized on IST time.")
 
 
-# @app.get("/admin/trigger-dropoffs")
-# def trigger_dropoffs_now():
-#     sent = check_and_send_dropoffs()
-#     return {"status": "success", "dropoffs_sent": sent}
-
-
-@app.get("/admin/test-template")
-def test_template_ping(phone: str, first_name: str = "Test", template_name: str = None):
-    """Usage: /admin/test-template?phone=919326841356&template_name=your_approved_name"""
-    t_name = template_name or "dropoff_1"
-
-    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "template",
-        "template": {
-            "name": t_name,
-            "language": {"code": "en"},  # Adjust to en_US if configured that way
-        },
-    }
-
-    res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
-
-    return {
-        "status_code": res.status_code,
-        "meta_response": (
-            res.json()
-            if res.headers.get("content-type") == "application/json"
-            else res.text
-        ),
-    }
-
-
-@app.get("/admin/preview-inactive")
-def preview_inactive():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-
-    now = datetime.now()
-    cutoff_24h = (now - timedelta(hours=24)).isoformat()
-
-    c.execute(
-        """
-        SELECT 
-            phone_number,
-            MAX(timestamp) AS last_log
-        FROM test_meal_logs
-        GROUP BY phone_number
-        HAVING last_log < ?
-    """,
-        (cutoff_24h,),
-    )
-
-    results = c.fetchall()
-    conn.close()
-
-    return {
-        "inactive_count": len(results),
-        "inactive_participants": [{"phone": r[0], "last_log": r[1]} for r in results],
-    }
+@app.get("/admin/trigger-dropoffs")
+def trigger_dropoffs_now():
+    sent = check_and_send_dropoffs()
+    return {"status": "success", "dropoffs_sent": sent}
