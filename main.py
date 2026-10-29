@@ -244,21 +244,21 @@ def view_dashboard(
             status_label = "not started"
             badge_style = "background:#f8fafc; color:#94a3b8; border:1px solid #e2e8f0;"
             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-    participant_rows.append(
-        f"""
-        <tr style="border-bottom: 1px solid #e2e8f0;">
-            <td style="padding:12px; font-family:monospace;">{phone}</td>
-            <td style="padding:12px; color:#475569;">{reg_str}</td>
-            <td style="padding:12px;">{day_badge}</td>
-            <td style="padding:12px;">
-                <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
-                    {status_label}
-                </span>
-            </td>
-            <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
-        </tr>
-    """
-    )
+        participant_rows.append(
+            f"""
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding:12px; font-family:monospace;">{phone}</td>
+                <td style="padding:12px; color:#475569;">{reg_str}</td>
+                <td style="padding:12px;">{day_badge}</td>
+                <td style="padding:12px;">
+                    <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
+                        {status_label}
+                    </span>
+                </td>
+                <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
+            </tr>
+        """
+        )
 
     # -------------------------------------------------------------
     # Build Table 2 Rows (Meals)
@@ -369,6 +369,7 @@ def view_dashboard(
         ]
     )
 
+    print(f"[DEBUG CHECK] Total rows in participant_rows list: {len(participant_rows)}")
     # -------------------------------------------------------------
     # Complete Page HTML
     # -------------------------------------------------------------
