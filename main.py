@@ -33,13 +33,6 @@ HARDCODED_NUDGES = {
     "dinner_nudge_2": "If it's taking this long, it has to be something yummy. How dare you hide!?",
 }
 
-COMPLETION_MESSAGE = (
-    "🏁 You made it! Day 15 is officially in the books.\n\n"
-    "Thank you so much for letting us into your daily routine over the past two weeks. "
-    "You can now eat your next meal without having to snap a photo first! 😝 "
-    # "\n\nAn exciting gift is on it's way, stay tuned!"
-)
-
 
 class UpdateMealTypeRequest(BaseModel):
     meal_log_id: int
@@ -119,20 +112,35 @@ def view_dashboard(
     # -------------------------------------------------------------
     # 1. Fetch participants, day 1 anchor, and last interaction
     # -------------------------------------------------------------
+    # c.execute(
+    #     """
+    #     SELECT
+    #         u.phone_number,
+    #         u.start_timestamp,
+    #         'active' AS status,
+    #         MIN(m.timestamp) AS first_interaction,
+    #         MAX(m.timestamp) AS last_interaction
+    #     FROM test_meal_logs m
+    #     GROUP BY m.phone_number
+    #     ORDER BY last_interaction DESC
+    # """
+    # )
+    # users = c.fetchall()
+
     c.execute(
         """
         SELECT 
-            u.phone_number,
-            u.start_timestamp,
-            'active' AS status,
+            m.phone_number,
             MIN(m.timestamp) AS first_interaction,
-            MAX(m.timestamp) AS last_interaction
+            MAX(m.timestamp) AS last_interaction,
+            COALESCE(u.status, 'active') AS user_status
         FROM test_meal_logs m
+        LEFT JOIN users u ON m.phone_number = u.phone_number
         GROUP BY m.phone_number
         ORDER BY last_interaction DESC
     """
     )
-    users = c.fetchall()
+    participant_records = c.fetchall()
 
     # Build user starts map for calculating day in meal logs
     user_starts = {}
@@ -184,11 +192,11 @@ def view_dashboard(
                     pass
         return None
 
-    # # -------------------------------------------------------------
-    # # Build Table 1 Rows (Participants)
-    # # -------------------------------------------------------------
-    # participant_rows = []
-    # for phone, start_ts, db_status, first_int, last_int in users:
+    # -------------------------------------------------------------
+    # Build Table 1 Rows (Participants)
+    # -------------------------------------------------------------
+    participant_rows = []
+    # for phone, start_ts, db_status, first_int, last_int in participant_records:
     #     reg_dt = parse_dt(start_ts)
     #     first_dt = parse_dt(first_int)
     #     last_dt = parse_dt(last_int)
@@ -274,21 +282,21 @@ def view_dashboard(
             status_label = "not started"
             badge_style = "background:#f8fafc; color:#94a3b8; border:1px solid #e2e8f0;"
             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-            # participant_rows.append(
-            #     f"""
-            #     <tr style="border-bottom: 1px solid #e2e8f0;">
-            #         <td style="padding:12px; font-family:monospace;">{phone}</td>
-            #         <td style="padding:12px; color:#475569;">{reg_str}</td>
-            #         <td style="padding:12px;">{day_badge}</td>
-            #         <td style="padding:12px;">
-            #             <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
-            #                 {status_label}
-            #             </span>
-            #         </td>
-            #         <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
-            #     </tr>
-            # """
-            # )
+            participant_rows.append(
+                f"""
+                <tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding:12px; font-family:monospace;">{phone}</td>
+                    <td style="padding:12px; color:#475569;">{reg_str}</td>
+                    <td style="padding:12px;">{day_badge}</td>
+                    <td style="padding:12px;">
+                        <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
+                            {status_label}
+                        </span>
+                    </td>
+                    <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
+                </tr>
+            """
+            )
 
     # -------------------------------------------------------------
     # Build Table 2 Rows (Meals)
