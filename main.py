@@ -144,18 +144,17 @@ def view_dashboard(
 
     # Build user starts map for calculating day in meal logs
     user_starts = {}
-    for u_phone, start_ts, _, first_int, _ in users:
+    for row in participant_records:
+        u_phone = row[0]
+        first_int = row[1]
         if first_int:
             try:
-                user_starts[u_phone] = datetime.fromisoformat(str(first_int)).date()
-            except Exception:
-                pass
-        if u_phone not in user_starts and start_ts:
-            try:
-                user_starts[u_phone] = datetime.fromtimestamp(float(start_ts)).date()
+                clean_first = str(first_int).replace("T", " ")[:10]
+                user_starts[u_phone] = datetime.strptime(clean_first, "%Y-%m-%d").date()
             except Exception:
                 user_starts[u_phone] = today_date
-
+        else:
+            user_starts[u_phone] = today_date
     # -------------------------------------------------------------
     # 2. Fetch distinct phone numbers for the filter dropdown
     # -------------------------------------------------------------
@@ -196,45 +195,7 @@ def view_dashboard(
     # Build Table 1 Rows (Participants)
     # -------------------------------------------------------------
     participant_rows = []
-    # for phone, start_ts, db_status, first_int, last_int in participant_records:
-    #     reg_dt = parse_dt(start_ts)
-    #     first_dt = parse_dt(first_int)
-    #     last_dt = parse_dt(last_int)
-
-    #     reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
-    #     last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
-
-    #     latest_activity = last_dt or reg_dt
-    #     is_inactive = bool(latest_activity and latest_activity < cutoff_24h)
-
-    #     if is_inactive:
-    #         status_label = "inactive"
-    #         badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
-    #     else:
-    #         status_label = "active"
-    #         badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
-
-    #     if first_dt:
-    #         anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
-    #         day_num = (anchor_date - first_dt.date()).days + 1
-
-    #         if day_num >= 15:
-    #             # Freeze at Day 15 and mark status as Completed
-    #             day_badge = "<span style='color:#16a34a; font-weight:700;'>Completed (Day 15)</span>"
-    #             status_label = "completed"
-    #             badge_style = (
-    #                 "background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;"
-    #             )
-    #         elif is_inactive:
-    #             day_badge = (
-    #                 f"<span style='color:#ef4444; font-weight:700;'>Paused at Day"
-    #                 f" {day_num}</span>"
-    #             )
-    #         else:
-    #             day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
-    #     else:
-    #         day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-    for phone, first_int, last_int in participant_records:
+    for phone, first_int, last_int, user_status in participant_records:
         first_dt = None
         last_dt = None
         try:
@@ -282,21 +243,21 @@ def view_dashboard(
             status_label = "not started"
             badge_style = "background:#f8fafc; color:#94a3b8; border:1px solid #e2e8f0;"
             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-            participant_rows.append(
-                f"""
-                <tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding:12px; font-family:monospace;">{phone}</td>
-                    <td style="padding:12px; color:#475569;">{reg_str}</td>
-                    <td style="padding:12px;">{day_badge}</td>
-                    <td style="padding:12px;">
-                        <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
-                            {status_label}
-                        </span>
-                    </td>
-                    <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
-                </tr>
-            """
-            )
+    participant_rows.append(
+        f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+            <td style="padding:12px; font-family:monospace;">{phone}</td>
+            <td style="padding:12px; color:#475569;">{reg_str}</td>
+            <td style="padding:12px;">{day_badge}</td>
+            <td style="padding:12px;">
+                <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
+                    {status_label}
+                </span>
+            </td>
+            <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
+        </tr>
+    """
+    )
 
     # -------------------------------------------------------------
     # Build Table 2 Rows (Meals)
