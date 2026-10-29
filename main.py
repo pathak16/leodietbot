@@ -184,63 +184,111 @@ def view_dashboard(
                     pass
         return None
 
-    # -------------------------------------------------------------
-    # Build Table 1 Rows (Participants)
-    # -------------------------------------------------------------
-    participant_rows = []
-    for phone, start_ts, db_status, first_int, last_int in users:
-        reg_dt = parse_dt(start_ts)
-        first_dt = parse_dt(first_int)
-        last_dt = parse_dt(last_int)
+    # # -------------------------------------------------------------
+    # # Build Table 1 Rows (Participants)
+    # # -------------------------------------------------------------
+    # participant_rows = []
+    # for phone, start_ts, db_status, first_int, last_int in users:
+    #     reg_dt = parse_dt(start_ts)
+    #     first_dt = parse_dt(first_int)
+    #     last_dt = parse_dt(last_int)
 
-        reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
+    #     reg_str = reg_dt.strftime("%Y-%m-%d %H:%M:%S") if reg_dt else "N/A"
+    #     last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
+
+    #     latest_activity = last_dt or reg_dt
+    #     is_inactive = bool(latest_activity and latest_activity < cutoff_24h)
+
+    #     if is_inactive:
+    #         status_label = "inactive"
+    #         badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
+    #     else:
+    #         status_label = "active"
+    #         badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
+
+    #     if first_dt:
+    #         anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
+    #         day_num = (anchor_date - first_dt.date()).days + 1
+
+    #         if day_num >= 15:
+    #             # Freeze at Day 15 and mark status as Completed
+    #             day_badge = "<span style='color:#16a34a; font-weight:700;'>Completed (Day 15)</span>"
+    #             status_label = "completed"
+    #             badge_style = (
+    #                 "background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;"
+    #             )
+    #         elif is_inactive:
+    #             day_badge = (
+    #                 f"<span style='color:#ef4444; font-weight:700;'>Paused at Day"
+    #                 f" {day_num}</span>"
+    #             )
+    #         else:
+    #             day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
+    #     else:
+    #         day_badge = "<span style='color:#94a3b8;'>Not started</span>"
+    for phone, first_int, last_int in participant_records:
+        first_dt = None
+        last_dt = None
+        try:
+            first_dt = datetime.fromisoformat(str(first_int))
+        except Exception:
+            pass
+        try:
+            last_dt = datetime.fromisoformat(str(last_int))
+        except Exception:
+            pass
+
+        reg_str = first_dt.strftime("%Y-%m-%d %H:%M:%S") if first_dt else "N/A"
         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
 
-        latest_activity = last_dt or reg_dt
-        is_inactive = bool(latest_activity and latest_activity < cutoff_24h)
+        # 1. Calculate raw study day
+        study_day = 0
+        if first_dt:
+            study_day = (today_date - first_dt.date()).days + 1
 
-        if is_inactive:
+        # 2. Determine inactivity strictly within the active study window
+        is_silent_24h = bool(last_dt and last_dt < cutoff_24h)
+
+        # 3. RULE: Completion takes absolute precedence
+        if study_day >= 15:
+            status_label = "completed"
+            badge_style = "background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;"
+            day_badge = (
+                "<span style='color:#16a34a; font-weight:700;'>Completed (Day"
+                " 15)</span>"
+            )
+        elif is_silent_24h:
             status_label = "inactive"
             badge_style = "background:#fee2e2; color:#ef4444; border:1px solid #fca5a5;"
-        else:
+            day_badge = (
+                f"<span style='color:#ef4444; font-weight:700;'>Paused at Day"
+                f" {study_day}</span>"
+            )
+        elif first_dt:
             status_label = "active"
             badge_style = "background:#dcfce7; color:#16a34a; border:1px solid #86efac;"
-
-        if first_dt:
-            anchor_date = last_dt.date() if (is_inactive and last_dt) else today_date
-            day_num = (anchor_date - first_dt.date()).days + 1
-
-            if day_num >= 15:
-                # Freeze at Day 15 and mark status as Completed
-                day_badge = "<span style='color:#16a34a; font-weight:700;'>Completed (Day 15)</span>"
-                status_label = "completed"
-                badge_style = (
-                    "background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;"
-                )
-            elif is_inactive:
-                day_badge = (
-                    f"<span style='color:#ef4444; font-weight:700;'>Paused at Day"
-                    f" {day_num}</span>"
-                )
-            else:
-                day_badge = f"<span style='color:#2563eb; font-weight:700;'>Day {day_num}</span>"
+            day_badge = (
+                f"<span style='color:#2563eb; font-weight:700;'>Day {study_day}</span>"
+            )
         else:
+            status_label = "not started"
+            badge_style = "background:#f8fafc; color:#94a3b8; border:1px solid #e2e8f0;"
             day_badge = "<span style='color:#94a3b8;'>Not started</span>"
-        participant_rows.append(
-            f"""
-            <tr style="border-bottom: 1px solid #e2e8f0;">
-                <td style="padding:12px; font-family:monospace;">{phone}</td>
-                <td style="padding:12px; color:#475569;">{reg_str}</td>
-                <td style="padding:12px;">{day_badge}</td>
-                <td style="padding:12px;">
-                    <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
-                        {status_label}
-                    </span>
-                </td>
-                <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
-            </tr>
-        """
-        )
+            # participant_rows.append(
+            #     f"""
+            #     <tr style="border-bottom: 1px solid #e2e8f0;">
+            #         <td style="padding:12px; font-family:monospace;">{phone}</td>
+            #         <td style="padding:12px; color:#475569;">{reg_str}</td>
+            #         <td style="padding:12px;">{day_badge}</td>
+            #         <td style="padding:12px;">
+            #             <span style="padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; {badge_style}">
+            #                 {status_label}
+            #             </span>
+            #         </td>
+            #         <td style="padding:12px; font-weight:500; color:{'#16a34a' if last_dt else '#94a3b8'};">{last_str}</td>
+            #     </tr>
+            # """
+            # )
 
     # -------------------------------------------------------------
     # Build Table 2 Rows (Meals)
@@ -914,7 +962,44 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
                     """,
                         (sender, current_ts),
                     )
-                    conn.commit()
+                    c.execute(
+                        "SELECT status FROM users WHERE phone_number = ?", (sender,)
+                    )
+                    row = c.fetchone()
+                    current_status = row[0] if row else None
+
+                    # NEVER downgrade a completed participant back to active
+                    if current_status != "completed":
+                        c.execute(
+                            "UPDATE users SET status = 'active', dropoff_sent = 0 WHERE phone_number"
+                            " = ?",
+                            (sender,),
+                        )
+                        conn.commit()
+                    else:
+                        # They are already completed, keep status='completed' and just reset dropoff_sent
+                        c.execute(
+                            "UPDATE users SET dropoff_sent = 0 WHERE phone_number = ?",
+                            (sender,),
+                        )
+                        row = c.fetchone()
+                        current_status = row[0] if row else None
+
+                        # NEVER downgrade a completed participant back to active
+                        if current_status != "completed":
+                            c.execute(
+                                "UPDATE users SET status = 'active', dropoff_sent = 0 WHERE phone_number"
+                                " = ?",
+                                (sender,),
+                            )
+                            conn.commit()
+                        else:
+                            # They are already completed, keep status='completed' and just reset dropoff_sent
+                            c.execute(
+                                "UPDATE users SET dropoff_sent = 0 WHERE phone_number = ?",
+                                (sender,),
+                            )
+                        conn.commit()
 
                     # 2. Send the Free Welcome Message
                     welcome_body = (
@@ -1233,6 +1318,7 @@ def check_and_send_dropoffs():
     c = conn.cursor()
 
     now = datetime.now()
+    today_dt = now.date()
     cutoff_24h = now - timedelta(hours=24)
 
     # 1. Pull each participant's most recent interaction
@@ -1240,15 +1326,33 @@ def check_and_send_dropoffs():
         """
         SELECT 
             m.phone_number,
-            MAX(m.timestamp) AS last_log
+            MIN(m.timestamp) AS first_log,
+            MAX(m.timestamp) AS last_log,
+            u.status
         FROM test_meal_logs m
+        LEFT JOIN users u ON m.phone_number = u.phone_number
         GROUP BY m.phone_number
     """
     )
     all_participants = c.fetchall()
 
     sent_count = 0
-    for phone, last_log in all_participants:
+    for phone, first_log, last_log, status in all_participants:
+
+        if status == "completed":
+            continue
+
+        # 2. HARD RULE: Calculate study day. If Day >= 15, they are graduated, SKIP THEM
+        if first_log:
+            try:
+                first_clean = str(first_log).replace("T", " ")[:10]
+                first_dt = datetime.strptime(first_clean, "%Y-%m-%d").date()
+                study_day = (today_dt - first_dt).days + 1
+                if study_day >= 15:
+                    continue
+            except Exception:
+                pass
+
         last_dt = None
         if last_log:
             try:
