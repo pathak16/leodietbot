@@ -1281,6 +1281,7 @@ def check_and_send_dropoffs():
                 )
                 conn.commit()
                 sent_count += 1
+                time.sleep(1.5)
 
     conn.close()
     print(f"[Drop-Off Check] Completed. Sent {sent_count} dropoff templates.")
@@ -1288,6 +1289,15 @@ def check_and_send_dropoffs():
 
 
 @app.get("/admin/trigger-dropoffs")
-def trigger_dropoffs_now():
+def trigger_dropoffs_now(reset: bool = False):
+    if reset:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        # Reset dropoff_sent back to 0 so failed users can receive it
+        c.execute("UPDATE users SET dropoff_sent = 0")
+        conn.commit()
+        conn.close()
+        print("[Drop-Off Reset] Reset all dropoff flags.")
+
     sent = check_and_send_dropoffs()
     return {"status": "success", "dropoffs_sent": sent}
