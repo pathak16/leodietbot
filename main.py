@@ -1343,7 +1343,17 @@ def check_and_send_dropoffs():
             try:
                 first_clean = str(first_log).replace("T", " ")[:10]
                 first_dt = datetime.strptime(first_clean, "%Y-%m-%d").date()
-                study_day = (today_dt - first_dt).days + 1
+
+                clean_ts = str(last_log).replace("T", " ")[:19] if last_log else None
+                last_dt = (
+                    datetime.strptime(clean_ts, "%Y-%m-%d %H:%M:%S")
+                    if clean_ts
+                    else None
+                )
+
+                is_inactive = (not last_dt) or (last_dt < cutoff_24h)
+                anchor_date = last_dt.date() if (is_inactive and last_dt) else today_dt
+                study_day = (anchor_date - first_dt).days + 1
                 if study_day >= 15:
                     continue
             except Exception:
