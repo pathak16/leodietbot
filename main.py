@@ -1191,6 +1191,104 @@ def start_scheduler():
     print("[System] Background scheduler initialized on IST time.")
 
 
+DROPOFF_TEMPLATE_NAME = (
+    "your_approved_dropoff_template_name"  # <-- Put your exact Meta template name here
+)
+
+
+def send_dropoff_template(phone_number: str) -> bool:
+    """Sends the approved Meta template to re-engage an inactive user (>24h silent)."""
+    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "template",
+        "template": {
+            "name": DROPOFF_TEMPLATE_NAME,
+            "language": {"code": "en"},  # Adjust to "en_US" if created as English (US)
+        },
+    }
+
+    try:
+        res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200:
+            print(f"[Drop-Off Nudge] Successfully sent template to {phone_number}")
+            return True
+        else:
+            print(
+                f"[Drop-Off Nudge Error] Meta rejected {phone_number}: {res.status_code} - {res.text}"
+            )
+            return False
+    except Exception as e:
+        print(f"[Drop-Off Exception] Error sending to {phone_number}: {e}")
+        return False
+
+
+def check_and_send_dropoffs():
+    """Identifies participants silent for >24h and delivers the re-engagement template once."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    now = datetime.now()
+    cutoff_24h = now - timedelta(hours=24)
+
+    # 1. Pull each participant's most recent interaction
+    c.execute(
+        """
+        SELECT 
+            m.phone_number,
+            MAX(m.timestamp) AS last_log
+        FROM test_meal_logs m
+        GROUP BY m.phone_number
+    """
+    )
+    all_participants = c.fetchall()
+
+    sent_count = 0
+    for phone, last_log in all_participants:
+        last_dt = None
+        if last_log:
+            try:
+                clean_ts = str(last_log).replace("T", " ")[:19]
+                last_dt = datetime.strptime(clean_ts, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+
+        # Check if they have been silent for more than 24 hours
+        is_inactive = (not last_dt) or (last_dt < cutoff_24h)
+
+        if is_inactive:
+            # 2. Check if drop-off template was already sent
+            c.execute("SELECT dropoff_sent FROM users WHERE phone_number = ?", (phone,))
+            row = c.fetchone()
+            already_sent = row[0] if (row and row[0] is not None) else 0
+
+            if already_sent:
+                continue
+
+            # 3. Fire the Meta template
+            if send_dropoff_template(phone_number=phone):
+                c.execute(
+                    """
+                    INSERT INTO users (phone_number, dropoff_sent)
+                    VALUES (?, 1)
+                    ON CONFLICT(phone_number) DO UPDATE SET dropoff_sent = 1
+                """,
+                    (phone,),
+                )
+                conn.commit()
+                sent_count += 1
+
+    conn.close()
+    print(f"[Drop-Off Check] Completed. Sent {sent_count} dropoff templates.")
+    return sent_count
+
+
 @app.get("/admin/trigger-dropoffs")
 def trigger_dropoffs_now():
     sent = check_and_send_dropoffs()
