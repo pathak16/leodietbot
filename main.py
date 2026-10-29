@@ -209,13 +209,14 @@ def view_dashboard(
         reg_str = first_dt.strftime("%Y-%m-%d %H:%M:%S") if first_dt else "N/A"
         last_str = last_dt.strftime("%Y-%m-%d %H:%M:%S") if last_dt else "Never logged"
 
-        # 1. Calculate raw study day
+        # 1. Determine inactivity strictly within the active study window
+        is_silent_24h = bool(last_dt and last_dt < cutoff_24h)
+
+        # 2. Calculate raw study day
         study_day = 0
         if first_dt:
             anchor_date = last_dt.date() if (is_silent_24h and last_dt) else today_date
             study_day = (anchor_date - first_dt.date()).days + 1
-        # 2. Determine inactivity strictly within the active study window
-        is_silent_24h = bool(last_dt and last_dt < cutoff_24h)
 
         # 3. RULE: Completion takes absolute precedence
         if study_day >= 15:
