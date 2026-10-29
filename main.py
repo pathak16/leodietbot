@@ -169,7 +169,6 @@ def view_dashboard(
         " test_meal_logs ORDER BY timestamp DESC"
     )
     raw_meals = c.fetchall()
-    # conn.close()
 
     # -------------------------------------------------------------
     # Helper to parse dates safely
@@ -213,8 +212,8 @@ def view_dashboard(
         # 1. Calculate raw study day
         study_day = 0
         if first_dt:
-            study_day = (today_date - first_dt.date()).days + 1
-
+            anchor_date = last_dt.date() if (is_silent_24h and last_dt) else today_date
+            study_day = (anchor_date - first_dt.date()).days + 1
         # 2. Determine inactivity strictly within the active study window
         is_silent_24h = bool(last_dt and last_dt < cutoff_24h)
 
@@ -490,6 +489,7 @@ def view_dashboard(
         </table>
     </body>
     </html>"""
+    conn.close()
 
     return HTMLResponse(page_html)
 
