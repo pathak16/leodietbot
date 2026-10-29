@@ -1191,9 +1191,7 @@ def start_scheduler():
     print("[System] Background scheduler initialized on IST time.")
 
 
-DROPOFF_TEMPLATE_NAME = (
-    "your_approved_dropoff_template_name"  # <-- Put your exact Meta template name here
-)
+DROPOFF_TEMPLATE_NAME = "dropoff_1"
 
 
 def send_dropoff_template(phone_number: str) -> bool:
