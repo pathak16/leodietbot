@@ -41,94 +41,6 @@ COMPLETION_MESSAGE = (
 )
 
 
-def check_and_send_completion(sender: str):
-    """
-    Evaluates if a participant has completed 15 study days.
-    If yes, and they haven't been notified yet, sends the celebratory message.
-    """
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-
-    # 1. Check if user was already congratulated
-    c.execute("SELECT completed_notified FROM users WHERE phone_number = ?", (sender,))
-    row = c.fetchone()
-    if row and row[0] == 1:
-        conn.close()
-        return
-
-    # 2. Get the earliest meal timestamp for this sender
-    c.execute(
-        "SELECT MIN(timestamp) FROM test_meal_logs WHERE phone_number = ?", (sender,)
-    )
-    first_log_row = c.fetchone()
-
-    if not first_log_row or not first_log_row[0]:
-        conn.close()
-        return
-
-    try:
-
-        first_log_str = str(first_log_row[0]).replace("T", " ")[:10]
-        first_dt = datetime.strptime(first_log_str, "%Y-%m-%d").date()
-        today_dt = datetime.now().date()
-
-        # 3. Calculate study day reached
-        study_day = (today_dt - first_dt).days + 1
-
-    except Exception as date_err:
-        print(f"[Graduation Date Error] {date_err} for timestamp {first_log_row[0]}")
-        conn.close()
-        return
-
-    print(
-        f"[Graduation Check] {sender}: First log={first_dt}, Today={today_dt},"
-        f" Study Day={study_day}"
-    )
-    if study_day >= 15:
-        # 4. Send hardcoded congratulatory message (free-form raw text)
-        ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-        headers = {
-            "Authorization": f"Bearer {ACCESS_TOKEN}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": sender,
-            "type": "text",
-            "text": {"body": COMPLETION_MESSAGE},
-        }
-
-        try:
-            res = requests.post(ack_endpoint, headers=headers, json=payload, timeout=10)
-            print(f"[Graduation Meta Response] {res.status_code}: {res.text}")
-            if res.status_code == 200:
-                # 5. Mark as completed in users table
-                c.execute(
-                    """
-                    INSERT INTO users (phone_number, completed_notified, status)
-                    VALUES (?, 1, 'completed')
-                    ON CONFLICT(phone_number) DO UPDATE SET completed_notified = 1, status = 'completed'
-                """,
-                    (sender,),
-                )
-                conn.commit()
-                print(
-                    f"[Graduation] Successfully sent Day 15 completion message to {sender}"
-                )
-            else:
-                print(
-                    f"[Graduation Error] Meta rejected message to {sender}: {res.text}"
-                )
-        except Exception as e:
-            print(f"[Graduation Exception] Error sending to {sender}: {e}")
-    else:
-        print(
-            f"[Graduation Skip] {sender} is on Day {study_day} (< 15). Not eligible"
-            " yet."
-        )
-    conn.close()
-
-
 class UpdateMealTypeRequest(BaseModel):
     meal_log_id: int
     meal_type: str
@@ -733,7 +645,6 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
             "text": {"body": "Logged! 📸 Meal recorded."},
         }
         requests.post(ack_endpoint, headers=headers, json=payload)
-        check_and_send_completion(sender)
 
         # --- GEMINI PROCESSING TEST ---
         print(f"[Test] Sending {filename} to Gemini...")
@@ -832,6 +743,91 @@ def get_default_meal_type(timestamp_str: str) -> str:
         return "Snacks"
     else:
         return "Dinner"
+
+
+def check_and_send_study_completions():
+    """Finds participants who hit Day 15+ and automatically sends their graduation message."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    today_dt = datetime.now().date()
+
+    c.execute(
+        """
+        SELECT 
+            m.phone_number,
+            MIN(m.timestamp) AS first_log
+        FROM test_meal_logs m
+        GROUP BY m.phone_number
+    """
+    )
+    participants = c.fetchall()
+
+    ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    sent_count = 0
+    for phone, first_log in participants:
+        if not first_log:
+            continue
+
+        # Skip if already congratulated
+        c.execute(
+            "SELECT completed_notified FROM users WHERE phone_number = ?", (phone,)
+        )
+        row = c.fetchone()
+        if row and row[0] == 1:
+            continue
+
+        # Calculate study day
+        try:
+            first_log_str = str(first_log).replace("T", " ")[:10]
+            first_dt = datetime.strptime(first_log_str, "%Y-%m-%d").date()
+            study_day = (today_dt - first_dt).days + 1
+        except Exception:
+            continue
+
+        if study_day >= 15:
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": phone,
+                "type": "text",
+                "text": {"body": COMPLETION_MESSAGE},
+            }
+
+            try:
+                res = requests.post(
+                    ack_endpoint, headers=headers, json=payload, timeout=10
+                )
+                if res.status_code == 200:
+                    c.execute(
+                        """
+                        INSERT INTO users (phone_number, completed_notified, status)
+                        VALUES (?, 1, 'completed')
+                        ON CONFLICT(phone_number) DO UPDATE SET completed_notified = 1, status = 'completed'
+                    """,
+                        (phone,),
+                    )
+                    conn.commit()
+                    sent_count += 1
+                    print(f"[Graduation Auto] Sent completion message to {phone}")
+                else:
+                    print(f"[Graduation Auto Error] Meta rejected {phone}: {res.text}")
+            except Exception as e:
+                print(f"[Graduation Auto Exception] {phone}: {e}")
+
+    conn.close()
+    return sent_count
+
+
+# Optional: Keep the manual endpoint as a backup trigger if you ever want to force it
+@app.get("/admin/trigger-completions")
+def manual_trigger_completions():
+    sent = check_and_send_study_completions()
+    return {"status": "success", "completions_sent": sent}
 
 
 # 4. Meta Webhook Handshake Verification (GET)
@@ -1109,7 +1105,7 @@ def run_conditional_nudges(hours_of_silence, nudge_key):
         else:
             last_activity = datetime.fromtimestamp(start_ts)
 
-        if (now - last_activity) >= silence_threshold:
+        if timedelta(hours=2) <= (now - last_activity) < timedelta(hours=23):
             push_text_nudge(phone_number, nudge_key)
             print(f" -> Sent missed-meal nudge to {phone_number}")
 
@@ -1174,6 +1170,21 @@ def start_scheduler():
         minute=0,
         misfire_grace_time=3600,
         args=[2, "dinner_nudge_2"],
+    )
+    scheduler.add_job(
+        check_and_send_study_completions,
+        "cron",
+        hour=11,
+        minute=30,
+        misfire_grace_time=3600,
+        id="auto_completion_checker",
+    )
+    scheduler.add_job(
+        check_and_send_dropoffs,
+        "interval",
+        hours=24,
+        id="dropoff_nudge_checker",
+        misfire_grace_time=3600,
     )
 
     scheduler.start()
