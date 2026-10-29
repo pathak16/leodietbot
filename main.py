@@ -159,7 +159,7 @@ def view_dashboard(
     # 2. Fetch distinct phone numbers for the filter dropdown
     # -------------------------------------------------------------
     # c.execute("SELECT DISTINCT phone_number FROM test_meal_logs ORDER BY phone_number")
-    all_phones = [row[0] for row in participants_record]
+    all_phones = [row[0] for row in c.fetchall()]
 
     # -------------------------------------------------------------
     # 3. Fetch all meal logs
