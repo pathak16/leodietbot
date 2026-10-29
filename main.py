@@ -195,6 +195,7 @@ def view_dashboard(
     # -------------------------------------------------------------
     participant_rows = []
     for phone, first_int, last_int, user_status in participant_records:
+        print(f"[Dashboard Row] Rendering {phone}...")
         first_dt = None
         last_dt = None
         try:
@@ -763,7 +764,7 @@ def get_default_meal_type(timestamp_str: str) -> str:
         return "Dinner"
 
 
-COMPLETION_TEMPLATE_NAME = "your_approved_day15_template_name"
+COMPLETION_TEMPLATE_NAME = "day_15"
 
 
 def check_and_send_study_completions():
