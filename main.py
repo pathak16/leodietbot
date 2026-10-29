@@ -37,7 +37,7 @@ COMPLETION_MESSAGE = (
     "🏁 You made it! Day 15 is officially in the books.\n\n"
     "Thank you so much for letting us into your daily routine over the past two weeks. "
     "You can now eat your next meal without having to snap a photo first! 😝 "
-    "\n\nAn exciting gift is on it's way, stay tuned!"
+    # "\n\nAn exciting gift is on it's way, stay tuned!"
 )
 
 
@@ -66,13 +66,24 @@ def check_and_send_completion(sender: str):
         conn.close()
         return
 
-    first_log_str = str(first_log_row[0]).replace("T", " ")[:10]
-    first_dt = datetime.strptime(first_log_str, "%Y-%m-%d").date()
-    today_dt = datetime.now().date()
+    try:
 
-    # 3. Calculate study day reached
-    study_day = (today_dt - first_dt).days + 1
+        first_log_str = str(first_log_row[0]).replace("T", " ")[:10]
+        first_dt = datetime.strptime(first_log_str, "%Y-%m-%d").date()
+        today_dt = datetime.now().date()
 
+        # 3. Calculate study day reached
+        study_day = (today_dt - first_dt).days + 1
+
+    except Exception as date_err:
+        print(f"[Graduation Date Error] {date_err} for timestamp {first_log_row[0]}")
+        conn.close()
+        return
+
+    print(
+        f"[Graduation Check] {sender}: First log={first_dt}, Today={today_dt},"
+        f" Study Day={study_day}"
+    )
     if study_day >= 15:
         # 4. Send hardcoded congratulatory message (free-form raw text)
         ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
@@ -89,6 +100,7 @@ def check_and_send_completion(sender: str):
 
         try:
             res = requests.post(ack_endpoint, headers=headers, json=payload, timeout=10)
+            print(f"[Graduation Meta Response] {res.status_code}: {res.text}")
             if res.status_code == 200:
                 # 5. Mark as completed in users table
                 c.execute(
@@ -109,7 +121,11 @@ def check_and_send_completion(sender: str):
                 )
         except Exception as e:
             print(f"[Graduation Exception] Error sending to {sender}: {e}")
-
+    else:
+        print(
+            f"[Graduation Skip] {sender} is on Day {study_day} (< 15). Not eligible"
+            " yet."
+        )
     conn.close()
 
 
@@ -704,6 +720,12 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
 
         # D. Send WhatsApp confirmation reply
         ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+
+        headers = {
+            "Authorization": f"Bearer {ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        }
+
         payload = {
             "messaging_product": "whatsapp",
             "to": sender,
