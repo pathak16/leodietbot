@@ -602,6 +602,13 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass
+
+    # Epoch seconds of the participant's most recent inbound WhatsApp message (any type)
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN last_inbound_at INTEGER")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -766,112 +773,209 @@ def get_default_meal_type(timestamp_str: str) -> str:
 
 
 COMPLETION_TEMPLATE_NAME = "day_15"
+DROPOFF_TEMPLATE_NAME = "dropoff_1"
+TEMPLATE_LANGUAGE = os.getenv("TEMPLATE_LANGUAGE", "en")  # "en_US" if the templates were created as English (US)
+
+STUDY_LENGTH_DAYS = 15
+DROPOFF_SILENCE = timedelta(hours=24)
+
+# Safety switch: until TEMPLATES_LIVE=1 is set, the scheduled/triggered day_15 and dropoff_1
+# jobs only log who WOULD receive a template. Nothing is sent and nothing is marked in the DB.
+TEMPLATES_LIVE = os.getenv("TEMPLATES_LIVE", "0") == "1"
 
 
-def check_and_send_study_completions():
-    """Finds participants who hit Day 15+ and sends the approved Meta graduation template."""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
+def record_inbound_activity(sender: str, msg_timestamp: int):
+    """Stamps the participant's last post and re-arms the drop-off for their next silence."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            """
+            UPDATE users
+            SET last_inbound_at = MAX(COALESCE(last_inbound_at, 0), ?), dropoff_sent = 0
+            WHERE phone_number = ?
+        """,
+            (msg_timestamp, sender),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[Activity Error] Could not record activity for {sender}: {e}")
 
-    today_dt = datetime.now().date()
 
-    # Query earliest meal and user's first name
+def _parse_db_ts(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value).replace("T", " ")[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def get_participant_activity(c):
+    """One row per participant with a logged meal: study day and time of last post."""
     c.execute(
         """
-        SELECT 
+        SELECT
             m.phone_number,
             MIN(m.timestamp) AS first_log,
-            u.first_name
+            MAX(m.timestamp) AS last_log,
+            u.status,
+            u.last_inbound_at,
+            u.dropoff_sent,
+            u.completed_notified
         FROM test_meal_logs m
         LEFT JOIN users u ON m.phone_number = u.phone_number
         GROUP BY m.phone_number
     """
     )
-    participants = c.fetchall()
+    now = datetime.now()
+    participants = []
+    for (
+        phone,
+        first_log,
+        last_log,
+        status,
+        last_inbound_at,
+        dropoff_sent,
+        completed_notified,
+    ) in c.fetchall():
+        first_dt = _parse_db_ts(first_log)
+        if not first_dt:
+            continue
 
-    ack_endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+        # Last post = latest of the last logged meal and the last inbound message of any kind
+        last_post = _parse_db_ts(last_log)
+        if last_inbound_at:
+            inbound_dt = datetime.fromtimestamp(last_inbound_at)
+            if not last_post or inbound_dt > last_post:
+                last_post = inbound_dt
+
+        participants.append(
+            {
+                "phone": phone,
+                "status": status,
+                "first_log": first_dt,
+                "last_post": last_post,
+                "hours_silent": round((now - last_post).total_seconds() / 3600, 1),
+                "study_day_today": (now.date() - first_dt.date()).days + 1,
+                "study_day_of_last_post": (last_post.date() - first_dt.date()).days + 1,
+                "dropoff_sent": bool(dropoff_sent),
+                "completed_notified": bool(completed_notified),
+            }
+        )
+    return participants
+
+
+def send_template(phone_number: str, template_name: str) -> bool:
+    """Sends an approved Meta template (works outside the 24-hour service window)."""
+    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
         "Content-Type": "application/json",
     }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": TEMPLATE_LANGUAGE},
+        },
+    }
 
-    sent_count = 0
-    for phone, first_log, first_name in participants:
-        if not first_log:
-            continue
-
-        # Skip if already completed and notified
-        c.execute(
-            "SELECT completed_notified FROM users WHERE phone_number = ?", (phone,)
+    try:
+        res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200:
+            print(f"[Template] Sent {template_name} to {phone_number}")
+            return True
+        print(
+            f"[Template Error] Meta rejected {template_name} for {phone_number}: {res.status_code} - {res.text}"
         )
-        row = c.fetchone()
-        if row and row[0] == 1:
+        return False
+    except Exception as e:
+        print(f"[Template Exception] {template_name} to {phone_number}: {e}")
+        return False
+
+
+def find_completion_candidates(c):
+    """Day 15 (or 16, to catch late posters) AND still active: posted within the last 24 hours."""
+    candidates = []
+    for p in get_participant_activity(c):
+        if p["completed_notified"]:
             continue
-
-        # Calculate study day
-        try:
-            first_log_str = str(first_log).replace("T", " ")[:10]
-            first_dt = datetime.strptime(first_log_str, "%Y-%m-%d").date()
-            study_day = (today_dt - first_dt).days + 1
-        except Exception:
+        if not (STUDY_LENGTH_DAYS <= p["study_day_today"] <= STUDY_LENGTH_DAYS + 1):
             continue
+        if p["hours_silent"] >= DROPOFF_SILENCE.total_seconds() / 3600:
+            continue  # Dropped off before finishing: no thank-you
+        candidates.append(p)
+    return candidates
 
-        if study_day >= 15:
-            # 2. TEMPLATE PAYLOAD (Bypasses the 24-hour window)
-            payload = {
-                "messaging_product": "whatsapp",
-                "to": phone,
-                "type": "template",
-                "template": {
-                    "name": COMPLETION_TEMPLATE_NAME,
-                    "language": {
-                        "code": "en"
-                    },  # Adjust to "en_US" if configured that way
-                },
-            }
 
-            # Optional: Include name parameter if your template has a {{1}} variable
-            if first_name:
-                payload["template"]["components"] = [
-                    {
-                        "type": "body",
-                        "parameters": [{"type": "text", "text": first_name}],
-                    }
-                ]
+def check_and_send_study_completions(dry_run: bool = None):
+    """Sends the day_15 thank-you template to participants who completed the study."""
+    if dry_run is None:
+        dry_run = not TEMPLATES_LIVE
 
-            try:
-                res = requests.post(
-                    ack_endpoint, headers=headers, json=payload, timeout=10
-                )
-                if res.status_code == 200:
-                    c.execute(
-                        """
-                        INSERT INTO users (phone_number, completed_notified, status)
-                        VALUES (?, 1, 'completed')
-                        ON CONFLICT(phone_number) DO UPDATE SET completed_notified = 1, status = 'completed'
-                    """,
-                        (phone,),
-                    )
-                    conn.commit()
-                    sent_count += 1
-                    print(f"[Graduation Auto] Sent completion template to {phone}")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    candidates = find_completion_candidates(c)
 
-                    # Rate-limit safety: 1.5s delay to avoid Error 130429
-                    time.sleep(1.5)
-                else:
-                    print(f"[Graduation Auto Error] Meta rejected {phone}: {res.text}")
-            except Exception as e:
-                print(f"[Graduation Auto Exception] {phone}: {e}")
+    sent = []
+    for p in candidates:
+        phone = p["phone"]
+        if dry_run:
+            print(f"[Graduation DRY RUN] Would send {COMPLETION_TEMPLATE_NAME} to {phone}")
+            continue
+        if send_template(phone, COMPLETION_TEMPLATE_NAME):
+            c.execute(
+                """
+                INSERT INTO users (phone_number, completed_notified, status)
+                VALUES (?, 1, 'completed')
+                ON CONFLICT(phone_number) DO UPDATE SET completed_notified = 1, status = 'completed'
+            """,
+                (phone,),
+            )
+            conn.commit()
+            sent.append(phone)
+            # Rate-limit safety: 1.5s delay to avoid Error 130429
+            time.sleep(1.5)
 
     conn.close()
-    return sent_count
+    print(
+        f"[Graduation] {'DRY RUN, ' if dry_run else ''}{len(candidates)} eligible, {len(sent)} sent."
+    )
+    return {"dry_run": dry_run, "eligible": candidates, "sent": sent}
 
 
 # Optional: Keep the manual endpoint as a backup trigger if you ever want to force it
 @app.get("/admin/trigger-completions")
 def manual_trigger_completions():
-    sent = check_and_send_study_completions()
-    return {"status": "success", "completions_sent": sent}
+    result = check_and_send_study_completions()
+    return {
+        "status": "success",
+        "dry_run": result["dry_run"],
+        "eligible": len(result["eligible"]),
+        "completions_sent": len(result["sent"]),
+    }
+
+
+@app.get("/admin/preview-completions")
+def preview_completions():
+    """Lists who would get the day_15 thank-you right now. Never sends."""
+    conn = sqlite3.connect(DB_FILE)
+    candidates = find_completion_candidates(conn.cursor())
+    conn.close()
+    return {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
+
+
+@app.get("/admin/test-template")
+def test_template(kind: str, phone: str):
+    """Sends day_15 (kind=completion) or dropoff_1 (kind=dropoff) to ONE number. No DB changes."""
+    template = {"completion": COMPLETION_TEMPLATE_NAME, "dropoff": DROPOFF_TEMPLATE_NAME}.get(kind)
+    if not template:
+        return {"status": "error", "detail": "kind must be 'completion' or 'dropoff'"}
+    ok = send_template(phone, template)
+    return {"status": "success" if ok else "failed", "template": template, "to": phone}
 
 
 # 4. Meta Webhook Handshake Verification (GET)
@@ -903,6 +1007,9 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
         if "messages" in change:
             msg = change["messages"][0]
             sender = msg["from"]
+
+            # Any post counts as activity: restarts the drop-off clock and re-arms the drop-off
+            record_inbound_activity(sender, int(msg["timestamp"]))
 
             # --- ADD THIS EXPIRATION CHECK ---
             msg_timestamp = int(msg["timestamp"])
@@ -967,35 +1074,11 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
                     # NEVER downgrade a completed participant back to active
                     if current_status != "completed":
                         c.execute(
-                            "UPDATE users SET status = 'active', dropoff_sent = 0 WHERE phone_number"
-                            " = ?",
-                            (sender,),
+                            "UPDATE users SET status = 'active', dropoff_sent = 0,"
+                            " last_inbound_at = ? WHERE phone_number = ?",
+                            (current_ts, sender),
                         )
-                        conn.commit()
-                    else:
-                        # They are already completed, keep status='completed' and just reset dropoff_sent
-                        c.execute(
-                            "UPDATE users SET dropoff_sent = 0 WHERE phone_number = ?",
-                            (sender,),
-                        )
-                        row = c.fetchone()
-                        current_status = row[0] if row else None
-
-                        # NEVER downgrade a completed participant back to active
-                        if current_status != "completed":
-                            c.execute(
-                                "UPDATE users SET status = 'active', dropoff_sent = 0 WHERE phone_number"
-                                " = ?",
-                                (sender,),
-                            )
-                            conn.commit()
-                        else:
-                            # They are already completed, keep status='completed' and just reset dropoff_sent
-                            c.execute(
-                                "UPDATE users SET dropoff_sent = 0 WHERE phone_number = ?",
-                                (sender,),
-                            )
-                        conn.commit()
+                    conn.commit()
 
                     # 2. Send the Free Welcome Message
                     welcome_body = (
@@ -1086,52 +1169,6 @@ def push_text_nudge(phone_number, nudge_key):
         print(f"[Success] Sent raw text nudge ({nudge_key}) to {phone_number}")
     else:
         print(f"[API Error] Meta rejected nudge to {phone_number}: {res.text}")
-
-
-def send_dropoff_template(phone_number: str, first_name: str = None) -> bool:
-    """Sends the approved Meta template to re-engage an inactive user."""
-    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
-    # Build components if your template has a {{1}} variable for the name
-    components = []
-    if first_name:
-        components.append(
-            {
-                "type": "body",
-                "parameters": [{"type": "text", "text": first_name}],
-            }
-        )
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone_number,
-        "type": "template",
-        "template": {
-            "name": "dropoff_1",
-            "language": {"code": "en"},
-        },
-    }
-
-    if components:
-        payload["template"]["components"] = components
-
-    try:
-        res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
-        if res.status_code == 200:
-            print(f"[Drop-Off Nudge] Successfully sent to {phone_number}")
-            return True
-        else:
-            print(
-                f"[Drop-Off Nudge Error] Meta rejected {phone_number}: {res.status_code} - {res.text}"
-            )
-            return False
-    except Exception as e:
-        print(f"[Drop-Off Exception] Error sending to {phone_number}: {e}")
-        return False
 
 
 def run_fixed_reminders(nudge_key):
@@ -1260,154 +1297,87 @@ def start_scheduler():
         misfire_grace_time=3600,
         id="auto_completion_checker",
     )
+    # Hourly between 9 AM and 9 PM IST, so a drop-off goes out within an hour of the
+    # participant crossing 24h of silence (never in the middle of the night)
     scheduler.add_job(
         check_and_send_dropoffs,
-        "interval",
-        hours=24,
+        "cron",
+        hour="9-21",
+        minute=15,
         id="dropoff_nudge_checker",
-        misfire_grace_time=3600,
+        misfire_grace_time=1800,
     )
 
     scheduler.start()
     print("[System] Background scheduler initialized on IST time.")
 
 
-DROPOFF_TEMPLATE_NAME = "dropoff_1"
+def find_dropoff_candidates(c):
+    """Silent for more than 24h since their last post, mid-study, and not yet nudged for this silence."""
+    candidates = []
+    for p in get_participant_activity(c):
+        if p["status"] == "completed" or p["dropoff_sent"]:
+            continue
+        if p["hours_silent"] < DROPOFF_SILENCE.total_seconds() / 3600:
+            continue
+        if p["study_day_of_last_post"] >= STUDY_LENGTH_DAYS:
+            continue  # Went quiet on/after day 15: finished, not a drop-off
+        if p["study_day_today"] > STUDY_LENGTH_DAYS:
+            continue  # Their 15 days are over: too late to re-engage
+        candidates.append(p)
+    return candidates
 
 
-def send_dropoff_template(phone_number: str) -> bool:
-    """Sends the approved Meta template to re-engage an inactive user (>24h silent)."""
-    endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
+def check_and_send_dropoffs(dry_run: bool = None):
+    """Sends dropoff_1 once per silence: re-armed whenever the participant posts again."""
+    if dry_run is None:
+        dry_run = not TEMPLATES_LIVE
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone_number,
-        "type": "template",
-        "template": {
-            "name": DROPOFF_TEMPLATE_NAME,
-            "language": {"code": "en"},  # Adjust to "en_US" if created as English (US)
-        },
-    }
-
-    try:
-        res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
-        if res.status_code == 200:
-            print(f"[Drop-Off Nudge] Successfully sent template to {phone_number}")
-            return True
-        else:
-            print(
-                f"[Drop-Off Nudge Error] Meta rejected {phone_number}: {res.status_code} - {res.text}"
-            )
-            return False
-    except Exception as e:
-        print(f"[Drop-Off Exception] Error sending to {phone_number}: {e}")
-        return False
-
-
-def check_and_send_dropoffs():
-    """Identifies participants silent for >24h and delivers the re-engagement template once."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    candidates = find_dropoff_candidates(c)
 
-    now = datetime.now()
-    today_dt = now.date()
-    cutoff_24h = now - timedelta(hours=24)
-
-    # 1. Pull each participant's most recent interaction
-    c.execute(
-        """
-        SELECT 
-            m.phone_number,
-            MIN(m.timestamp) AS first_log,
-            MAX(m.timestamp) AS last_log,
-            u.status
-        FROM test_meal_logs m
-        LEFT JOIN users u ON m.phone_number = u.phone_number
-        GROUP BY m.phone_number
-    """
-    )
-    all_participants = c.fetchall()
-
-    sent_count = 0
-    for phone, first_log, last_log, status in all_participants:
-
-        if status == "completed":
+    sent = []
+    for p in candidates:
+        phone = p["phone"]
+        if dry_run:
+            print(f"[Drop-Off DRY RUN] Would send {DROPOFF_TEMPLATE_NAME} to {phone}")
             continue
-
-        # 2. HARD RULE: Calculate study day. If Day >= 15, they are graduated, SKIP THEM
-        if first_log:
-            try:
-                first_clean = str(first_log).replace("T", " ")[:10]
-                first_dt = datetime.strptime(first_clean, "%Y-%m-%d").date()
-
-                clean_ts = str(last_log).replace("T", " ")[:19] if last_log else None
-                last_dt = (
-                    datetime.strptime(clean_ts, "%Y-%m-%d %H:%M:%S")
-                    if clean_ts
-                    else None
-                )
-
-                is_inactive = (not last_dt) or (last_dt < cutoff_24h)
-                anchor_date = last_dt.date() if (is_inactive and last_dt) else today_dt
-                study_day = (anchor_date - first_dt).days + 1
-                if study_day >= 15:
-                    continue
-            except Exception:
-                pass
-
-        last_dt = None
-        if last_log:
-            try:
-                clean_ts = str(last_log).replace("T", " ")[:19]
-                last_dt = datetime.strptime(clean_ts, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
-
-        # Check if they have been silent for more than 24 hours
-        is_inactive = (not last_dt) or (last_dt < cutoff_24h)
-
-        if is_inactive:
-            # 2. Check if drop-off template was already sent
-            c.execute("SELECT dropoff_sent FROM users WHERE phone_number = ?", (phone,))
-            row = c.fetchone()
-            already_sent = row[0] if (row and row[0] is not None) else 0
-
-            if already_sent:
-                continue
-
-            # 3. Fire the Meta template
-            if send_dropoff_template(phone_number=phone):
-                c.execute(
-                    """
-                    INSERT INTO users (phone_number, dropoff_sent)
-                    VALUES (?, 1)
-                    ON CONFLICT(phone_number) DO UPDATE SET dropoff_sent = 1
-                """,
-                    (phone,),
-                )
-                conn.commit()
-                sent_count += 1
-                time.sleep(1.5)
+        if send_template(phone, DROPOFF_TEMPLATE_NAME):
+            c.execute(
+                """
+                INSERT INTO users (phone_number, dropoff_sent)
+                VALUES (?, 1)
+                ON CONFLICT(phone_number) DO UPDATE SET dropoff_sent = 1
+            """,
+                (phone,),
+            )
+            conn.commit()
+            sent.append(phone)
+            time.sleep(1.5)
 
     conn.close()
-    print(f"[Drop-Off Check] Completed. Sent {sent_count} dropoff templates.")
-    return sent_count
+    print(
+        f"[Drop-Off Check] {'DRY RUN, ' if dry_run else ''}{len(candidates)} eligible, {len(sent)} sent."
+    )
+    return {"dry_run": dry_run, "eligible": candidates, "sent": sent}
 
 
 @app.get("/admin/trigger-dropoffs")
-def trigger_dropoffs_now(reset: bool = False):
-    if reset:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        # Reset dropoff_sent back to 0 so failed users can receive it
-        c.execute("UPDATE users SET dropoff_sent = 0")
-        conn.commit()
-        conn.close()
-        print("[Drop-Off Reset] Reset all dropoff flags.")
+def trigger_dropoffs_now():
+    result = check_and_send_dropoffs()
+    return {
+        "status": "success",
+        "dry_run": result["dry_run"],
+        "eligible": len(result["eligible"]),
+        "dropoffs_sent": len(result["sent"]),
+    }
 
-    sent = check_and_send_dropoffs()
-    return {"status": "success", "dropoffs_sent": sent}
+
+@app.get("/admin/preview-dropoffs")
+def preview_dropoffs():
+    """Lists who would get the dropoff_1 template right now. Never sends."""
+    conn = sqlite3.connect(DB_FILE)
+    candidates = find_dropoff_candidates(conn.cursor())
+    conn.close()
+    return {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
