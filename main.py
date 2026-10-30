@@ -547,20 +547,27 @@ def export_photos(phone: str = None):
     """Downloads a ZIP of all meal photos, organised by participant and study day.
 
     <phone>/Day_NN_<date>/<time>_<meal type>_<caption>.jpg, where Day N is the Nth
-    day the participant logged a meal. meals.csv lists every log (text-only too).
-    Times are server time (UTC), the same as the dashboard. ?phone=91... exports one person.
+    day the participant logged a meal. meals.csv lists every log (text-only too) with the
+    AI nutrition estimates. Folder dates/times are server time (UTC), the same as the
+    dashboard; meals.csv also has IST. ?phone=91... exports one person.
     """
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     query = (
-        "SELECT id, phone_number, timestamp, caption, image_path, meal_type"
-        " FROM test_meal_logs"
+        "SELECT m.id, m.phone_number, m.timestamp, m.caption, m.image_path, m.meal_type,"
+        " n.identified_items, n.meal_type, n.food_source_type, n.staple_format,"
+        " n.protein_grams, n.carbs_grams, n.fat_grams, n.fiber_grams,"
+        " n.protein_source_type, n.is_caffeine_or_sugar_crutch, n.primary_fuel_source,"
+        " n.crash_risk_level"
+        " FROM test_meal_logs m"
+        " LEFT JOIN meal_nutrition n ON n.id = ("
+        "   SELECT MAX(id) FROM meal_nutrition WHERE meal_log_id = m.id)"
     )
     params = ()
     if phone:
-        query += " WHERE phone_number = ?"
+        query += " WHERE m.phone_number = ?"
         params = (phone,)
-    c.execute(query + " ORDER BY phone_number, timestamp", params)
+    c.execute(query + " ORDER BY m.phone_number, m.timestamp", params)
     logs = c.fetchall()
     conn.close()
 
@@ -577,8 +584,14 @@ def export_photos(phone: str = None):
     tmp.close()
     index_rows = []
     with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
-        for log_id, p, ts, caption, img_path, meal_type in logs:
+        for log_id, p, ts, caption, img_path, meal_type, *ai in logs:
             ts_clean = str(ts).replace("T", " ")[:19]
+            try:
+                ts_ist = (
+                    datetime.strptime(ts_clean, "%Y-%m-%d %H:%M:%S") + timedelta(hours=5, minutes=30)
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                ts_ist = ""
             date = ts_clean[:10]
             day = day_index[p][date]
             zip_path = "(text only)" if (not img_path or img_path == "text_only") else "(photo file missing)"
@@ -587,13 +600,21 @@ def export_photos(phone: str = None):
                 zip_path = f"{p}/Day_{day:02d}_{date}/{name}"
                 zf.write(img_path, zip_path)
             index_rows.append(
-                [p, day, date, ts_clean, meal_type or "", caption or "", zip_path]
+                [p, day, date, ts_clean, ts_ist, meal_type or "", caption or "", zip_path]
+                + ["" if v is None else v for v in ai]
             )
 
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow(
-            ["phone", "study_day", "date", "timestamp_utc", "meal_type", "caption", "photo_in_zip"]
+            [
+                "phone", "study_day", "date", "timestamp_utc", "timestamp_ist", "meal_type",
+                "caption", "photo_in_zip",
+                # AI (vision model) estimates, blank for text-only logs
+                "ai_items", "ai_meal_type", "ai_food_source", "ai_staple_format",
+                "ai_protein_g", "ai_carbs_g", "ai_fat_g", "ai_fiber_g", "ai_protein_source",
+                "ai_caffeine_or_sugar_crutch", "ai_primary_fuel", "ai_crash_risk",
+            ]
         )
         writer.writerows(index_rows)
         zf.writestr("meals.csv", buf.getvalue())
