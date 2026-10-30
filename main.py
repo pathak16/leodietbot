@@ -613,6 +613,14 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass
+
+    # Delivery tracking for the day_15 thank-you: Meta's message id and its latest status
+    for column in ("completion_wamid TEXT", "completion_status TEXT"):
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {column}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     conn.close()
 
@@ -788,6 +796,9 @@ DROPOFF_SILENCE = timedelta(hours=24)
 # jobs only log who WOULD receive a template. Nothing is sent and nothing is marked in the DB.
 TEMPLATES_LIVE = os.getenv("TEMPLATES_LIVE", "0") == "1"
 
+# Seconds between thank-you sends, to stay under Meta's rate limit
+COMPLETION_SEND_GAP_SECONDS = float(os.getenv("COMPLETION_SEND_GAP_SECONDS", "15"))
+
 
 def record_inbound_activity(sender: str, msg_timestamp: int):
     """Stamps the participant's last post and re-arms the drop-off for their next silence."""
@@ -828,7 +839,8 @@ def get_participant_activity(c):
             u.last_inbound_at,
             u.dropoff_sent,
             u.completed_notified,
-            COUNT(DISTINCT substr(m.timestamp, 1, 10)) AS days_logged
+            COUNT(DISTINCT substr(m.timestamp, 1, 10)) AS days_logged,
+            u.completion_status
         FROM test_meal_logs m
         LEFT JOIN users u ON m.phone_number = u.phone_number
         GROUP BY m.phone_number
@@ -845,6 +857,7 @@ def get_participant_activity(c):
         dropoff_sent,
         completed_notified,
         days_logged,
+        completion_status,
     ) in c.fetchall():
         first_dt = _parse_db_ts(first_log)
         if not first_dt:
@@ -867,13 +880,22 @@ def get_participant_activity(c):
                 "dropoff_sent": bool(dropoff_sent),
                 "completed_notified": bool(completed_notified),
                 "days_logged": days_logged,
+                "completion_status": completion_status,
             }
         )
     return participants
 
 
 def send_template(phone_number: str, template_name: str) -> bool:
-    """Sends an approved Meta template (works outside the 24-hour service window)."""
+    return send_template_get_id(phone_number, template_name) is not None
+
+
+def send_template_get_id(phone_number: str, template_name: str):
+    """Sends an approved Meta template (works outside the 24-hour service window).
+
+    Returns Meta's message id (wamid) if accepted, else None. Accepted is not delivered:
+    delivery failures arrive later as a 'statuses' webhook (see handle_message_statuses).
+    """
     endpoint = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {ACCESS_TOKEN}",
@@ -892,15 +914,16 @@ def send_template(phone_number: str, template_name: str) -> bool:
     try:
         res = requests.post(endpoint, headers=headers, json=payload, timeout=10)
         if res.status_code == 200:
-            print(f"[Template] Sent {template_name} to {phone_number}")
-            return True
+            print(f"[Template] Accepted {template_name} for {phone_number}")
+            messages = res.json().get("messages") or [{}]
+            return messages[0].get("id") or "unknown"
         print(
             f"[Template Error] Meta rejected {template_name} for {phone_number}: {res.status_code} - {res.text}"
         )
-        return False
+        return None
     except Exception as e:
         print(f"[Template Exception] {template_name} to {phone_number}: {e}")
-        return False
+        return None
 
 
 def completion_skip_reason(p):
@@ -932,19 +955,22 @@ def check_and_send_study_completions(dry_run: bool = None):
         if dry_run:
             print(f"[Graduation DRY RUN] Would send {COMPLETION_TEMPLATE_NAME} to {phone}")
             continue
-        if send_template(phone, COMPLETION_TEMPLATE_NAME):
+        wamid = send_template_get_id(phone, COMPLETION_TEMPLATE_NAME)
+        if wamid:
+            # Marked as sent now; reverted by handle_message_statuses if delivery fails
             c.execute(
                 """
-                INSERT INTO users (phone_number, completed_notified, status)
-                VALUES (?, 1, 'completed')
-                ON CONFLICT(phone_number) DO UPDATE SET completed_notified = 1, status = 'completed'
+                INSERT INTO users (phone_number, completed_notified, status, completion_wamid, completion_status)
+                VALUES (?, 1, 'completed', ?, 'sent')
+                ON CONFLICT(phone_number) DO UPDATE SET completed_notified = 1, status = 'completed',
+                    completion_wamid = excluded.completion_wamid, completion_status = 'sent'
             """,
-                (phone,),
+                (phone, wamid),
             )
             conn.commit()
             sent.append(phone)
-            # Rate-limit safety: 1.5s delay to avoid Error 130429
-            time.sleep(1.5)
+            # Spread sends out to stay clear of Meta's rate limit (Error 130429)
+            time.sleep(COMPLETION_SEND_GAP_SECONDS)
 
     conn.close()
     print(
@@ -1011,6 +1037,34 @@ def reset_completions(apply: bool = False):
         print(f"[Completion Reset] Cleared thank-you flag for {len(phones)} participant(s).")
     conn.close()
     return {"applied": apply, "count": len(phones), "phones": phones}
+
+
+def handle_message_statuses(statuses):
+    """Tracks delivery of the day_15 thank-you; a failed delivery re-arms it for the next run."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    for st in statuses:
+        wamid, status = st.get("id"), st.get("status")
+        c.execute("SELECT phone_number FROM users WHERE completion_wamid = ?", (wamid,))
+        row = c.fetchone()
+        if not row:
+            continue  # Not a thank-you message
+        if status == "failed":
+            err = (st.get("errors") or [{}])[0]
+            label = f"failed: {err.get('code')} {err.get('title', '')}".strip()
+            c.execute(
+                "UPDATE users SET completed_notified = 0, completion_status = ? WHERE phone_number = ?",
+                (label, row[0]),
+            )
+            print(f"[Graduation] Delivery to {row[0]} {label}. Will retry on the next run.")
+        elif status in ("delivered", "read"):
+            c.execute(
+                "UPDATE users SET completion_status = ? WHERE phone_number = ?",
+                (status, row[0]),
+            )
+            print(f"[Graduation] Thank-you {status} for {row[0]}")
+    conn.commit()
+    conn.close()
 
 
 # Optional: Keep the manual endpoint as a backup trigger if you ever want to force it
@@ -1080,6 +1134,9 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
     try:
         entry = data.get("entry", [])[0]
         change = entry.get("changes", [])[0]["value"]
+
+        if "statuses" in change:
+            handle_message_statuses(change["statuses"])
 
         if "messages" in change:
             msg = change["messages"][0]
@@ -1369,9 +1426,9 @@ def start_scheduler():
     scheduler.add_job(
         check_and_send_study_completions,
         "cron",
-        hour=11,
+        hour="10-20",  # Hourly 10:30 AM-8:30 PM IST, so failed deliveries are retried
         minute=30,
-        misfire_grace_time=3600,
+        misfire_grace_time=1800,
         id="auto_completion_checker",
     )
     # DROP-OFFS PAUSED: focusing on the completion flow. Uncomment to re-enable.
