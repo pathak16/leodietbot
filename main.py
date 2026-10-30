@@ -993,6 +993,26 @@ def fix_statuses(apply: bool = False):
     return {"applied": False, "count": len(corrections), "would_change": corrections}
 
 
+@app.get("/admin/reset-completions")
+def reset_completions(apply: bool = False):
+    """Clears every completed_notified flag so day_15 can be (re)sent.
+
+    The old day-15 job recorded thank-yous that participants never received. Preview by
+    default; apply=true clears the flags. Run /admin/trigger-completions afterwards: it
+    only sends to participants with 15 logged days.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT phone_number FROM users WHERE completed_notified = 1")
+    phones = [row[0] for row in c.fetchall()]
+    if apply:
+        c.execute("UPDATE users SET completed_notified = 0 WHERE completed_notified = 1")
+        conn.commit()
+        print(f"[Completion Reset] Cleared thank-you flag for {len(phones)} participant(s).")
+    conn.close()
+    return {"applied": apply, "count": len(phones), "phones": phones}
+
+
 # Optional: Keep the manual endpoint as a backup trigger if you ever want to force it
 @app.get("/admin/trigger-completions")
 def manual_trigger_completions():
@@ -1354,16 +1374,17 @@ def start_scheduler():
         misfire_grace_time=3600,
         id="auto_completion_checker",
     )
+    # DROP-OFFS PAUSED: focusing on the completion flow. Uncomment to re-enable.
     # Hourly between 9 AM and 9 PM IST, so a drop-off goes out within an hour of the
     # participant crossing 24h of silence (never in the middle of the night)
-    scheduler.add_job(
-        check_and_send_dropoffs,
-        "cron",
-        hour="9-21",
-        minute=15,
-        id="dropoff_nudge_checker",
-        misfire_grace_time=1800,
-    )
+    # scheduler.add_job(
+    #     check_and_send_dropoffs,
+    #     "cron",
+    #     hour="9-21",
+    #     minute=15,
+    #     id="dropoff_nudge_checker",
+    #     misfire_grace_time=1800,
+    # )
 
     scheduler.start()
     print("[System] Background scheduler initialized on IST time.")
@@ -1426,6 +1447,8 @@ def check_and_send_dropoffs(dry_run: bool = None):
 
 @app.get("/admin/trigger-dropoffs")
 def trigger_dropoffs_now():
+    # DROP-OFFS PAUSED: focusing on the completion flow. Remove this return to re-enable.
+    return {"status": "disabled", "detail": "Drop-offs are paused"}
     result = check_and_send_dropoffs()
     return {
         "status": "success",
