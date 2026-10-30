@@ -133,7 +133,8 @@ def view_dashboard(
             m.phone_number,
             MIN(m.timestamp) AS first_interaction,
             MAX(m.timestamp) AS last_interaction,
-            COALESCE(u.status, 'active') AS user_status
+            COALESCE(u.status, 'active') AS user_status,
+            COUNT(DISTINCT substr(m.timestamp, 1, 10)) AS days_logged
         FROM test_meal_logs m
         LEFT JOIN users u ON m.phone_number = u.phone_number
         GROUP BY m.phone_number
@@ -170,6 +171,14 @@ def view_dashboard(
     )
     raw_meals = c.fetchall()
 
+    logged_dates = {}
+    for _, m_phone, m_ts, *_ in raw_meals:
+        logged_dates.setdefault(m_phone, set()).add(str(m_ts).replace("T", " ")[:10])
+    logged_day_index = {
+        m_phone: {d: i + 1 for i, d in enumerate(sorted(dates))}
+        for m_phone, dates in logged_dates.items()
+    }
+
     # -------------------------------------------------------------
     # Helper to parse dates safely
     # -------------------------------------------------------------
@@ -194,7 +203,7 @@ def view_dashboard(
     # Build Table 1 Rows (Participants)
     # -------------------------------------------------------------
     participant_rows = []
-    for phone, first_int, last_int, user_status in participant_records:
+    for phone, first_int, last_int, user_status, days_logged in participant_records:
         print(f"[Dashboard Row] Rendering {phone}...")
         first_dt = None
         last_dt = None
@@ -213,14 +222,11 @@ def view_dashboard(
         # 1. Determine inactivity strictly within the active study window
         is_silent_24h = bool(last_dt and last_dt < cutoff_24h)
 
-        # 2. Calculate raw study day
-        study_day = 0
-        if first_dt:
-            anchor_date = last_dt.date() if (is_silent_24h and last_dt) else today_date
-            study_day = (anchor_date - first_dt.date()).days + 1
+        # 2. Study day = number of different days with a logged meal (no log, no progress)
+        study_day = days_logged or 0
 
         # 3. RULE: Completion takes absolute precedence
-        if study_day >= 15:
+        if study_day >= STUDY_LENGTH_DAYS:
             status_label = "completed"
             badge_style = "background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;"
             day_badge = (
@@ -271,10 +277,8 @@ def view_dashboard(
 
         # Calculate Study Day
         try:
-            log_dt = datetime.fromisoformat(str(ts_str))
-            reg_date = user_starts.get(phone, log_dt.date())
-            raw_calc_day = (log_dt.date() - reg_date).days + 1
-            calc_day = max(1, min(15, raw_calc_day))
+            raw_calc_day = logged_day_index[phone][str(ts_str).replace("T", " ")[:10]]
+            calc_day = max(1, min(STUDY_LENGTH_DAYS, raw_calc_day))
             day_label = f"Day {calc_day}"
         except Exception:
             calc_day = 1
@@ -776,8 +780,8 @@ COMPLETION_TEMPLATE_NAME = "day_15"
 DROPOFF_TEMPLATE_NAME = "dropoff_1"
 TEMPLATE_LANGUAGE = os.getenv("TEMPLATE_LANGUAGE", "en")  # "en_US" if the templates were created as English (US)
 
+# A study day only counts if a meal was logged that day: 15 logged days = completed
 STUDY_LENGTH_DAYS = 15
-MIN_DAYS_LOGGED_TO_COMPLETE = 10  # Thank-you only if meals were logged on at least this many days
 DROPOFF_SILENCE = timedelta(hours=24)
 
 # Safety switch: until TEMPLATES_LIVE=1 is set, the scheduled/triggered day_15 and dropoff_1
@@ -860,8 +864,6 @@ def get_participant_activity(c):
                 "first_log": first_dt,
                 "last_post": last_post,
                 "hours_silent": round((now - last_post).total_seconds() / 3600, 1),
-                "study_day_today": (now.date() - first_dt.date()).days + 1,
-                "study_day_of_last_post": (last_post.date() - first_dt.date()).days + 1,
                 "dropoff_sent": bool(dropoff_sent),
                 "completed_notified": bool(completed_notified),
                 "days_logged": days_logged,
@@ -905,17 +907,13 @@ def completion_skip_reason(p):
     """Why a participant would NOT get day_15 right now (None = they would get it)."""
     if p["completed_notified"]:
         return "thank-you already sent"
-    if p["study_day_today"] < STUDY_LENGTH_DAYS:
-        return f"not at day {STUDY_LENGTH_DAYS} yet (day {p['study_day_today']})"
-    if p["study_day_today"] > STUDY_LENGTH_DAYS + 1:
-        return "past the day 15-16 thank-you window"
-    if p["days_logged"] < MIN_DAYS_LOGGED_TO_COMPLETE:
-        return f"logged on only {p['days_logged']} days (needs {MIN_DAYS_LOGGED_TO_COMPLETE})"
+    if p["days_logged"] < STUDY_LENGTH_DAYS:
+        return f"logged on {p['days_logged']} of {STUDY_LENGTH_DAYS} days"
     return None
 
 
 def find_completion_candidates(c):
-    """Day 15 (or 16, to catch late loggers) AND logged meals on at least 10 different days."""
+    """Logged a meal on 15 different days and hasn't been sent the thank-you yet."""
     return [p for p in get_participant_activity(c) if completion_skip_reason(p) is None]
 
 
@@ -956,18 +954,16 @@ def check_and_send_study_completions(dry_run: bool = None):
 
 
 def find_status_corrections(c):
-    """Participants past day 16 whose status doesn't match what they actually logged.
+    """Participants marked 'completed' (by the old day-15 job) without 15 logged days.
 
-    Fewer than MIN_DAYS_LOGGED_TO_COMPLETE logged days -> 'dropped_out' (stops all nudges).
-    completed_notified is left untouched: it records that a thank-you was sent.
+    They are moved to 'dropped_out' (stops all nudges). completed_notified is left
+    untouched: it records that a thank-you was actually sent to them.
     """
-    corrections = []
-    for p in get_participant_activity(c):
-        if p["study_day_today"] <= STUDY_LENGTH_DAYS + 1:
-            continue  # Still inside the thank-you window
-        if p["days_logged"] < MIN_DAYS_LOGGED_TO_COMPLETE and p["status"] != "dropped_out":
-            corrections.append({**p, "new_status": "dropped_out"})
-    return corrections
+    return [
+        {**p, "new_status": "dropped_out"}
+        for p in get_participant_activity(c)
+        if p["status"] == "completed" and p["days_logged"] < STUDY_LENGTH_DAYS
+    ]
 
 
 def apply_status_corrections():
@@ -976,11 +972,8 @@ def apply_status_corrections():
     corrections = find_status_corrections(c)
     for p in corrections:
         c.execute(
-            """
-            INSERT INTO users (phone_number, status) VALUES (?, ?)
-            ON CONFLICT(phone_number) DO UPDATE SET status = excluded.status
-        """,
-            (p["phone"], p["new_status"]),
+            "UPDATE users SET status = ? WHERE phone_number = ?",
+            (p["new_status"], p["phone"]),
         )
     conn.commit()
     conn.close()
@@ -988,14 +981,9 @@ def apply_status_corrections():
     return corrections
 
 
-def run_daily_completion_job():
-    apply_status_corrections()
-    check_and_send_study_completions()
-
-
 @app.get("/admin/fix-statuses")
 def fix_statuses(apply: bool = False):
-    """Preview (default) or apply=true: mark past-day-16 participants with <10 logged days as dropped_out."""
+    """Preview (default) or apply=true: move wrongly 'completed' participants to dropped_out."""
     if apply:
         changed = apply_status_corrections()
         return {"applied": True, "count": len(changed), "changed": changed}
@@ -1359,7 +1347,7 @@ def start_scheduler():
         args=[2, "dinner_nudge_2"],
     )
     scheduler.add_job(
-        run_daily_completion_job,
+        check_and_send_study_completions,
         "cron",
         hour=11,
         minute=30,
@@ -1386,20 +1374,13 @@ def dropoff_skip_reason(p):
     if p["status"] == "completed":
         return "completed the study"
     if p["status"] == "dropped_out":
-        return "dropped out (study period over)"
+        return "dropped out"
     if p["dropoff_sent"]:
         return "drop-off already sent for this silence (re-arms when they post again)"
     if p["hours_silent"] < DROPOFF_SILENCE.total_seconds() / 3600:
         return "posted within the last 24 hours"
-    if p["study_day_of_last_post"] >= STUDY_LENGTH_DAYS:
-        return "went quiet on/after day 15: finished, not a drop-off"
-    if p["study_day_today"] > STUDY_LENGTH_DAYS:
-        return "their 15 days are over: too late to re-engage"
-    if (
-        p["study_day_today"] >= STUDY_LENGTH_DAYS
-        and p["days_logged"] >= MIN_DAYS_LOGGED_TO_COMPLETE
-    ):
-        return "already qualifies for the thank-you instead"
+    if p["days_logged"] >= STUDY_LENGTH_DAYS:
+        return "logged all 15 days: gets the thank-you instead"
     return None
 
 
