@@ -133,7 +133,8 @@ def view_dashboard(
             m.phone_number,
             MIN(m.timestamp) AS first_interaction,
             MAX(m.timestamp) AS last_interaction,
-            COALESCE(u.status, 'active') AS user_status
+            COALESCE(u.status, 'active') AS user_status,
+            COUNT(DISTINCT substr(m.timestamp, 1, 10)) AS days_logged
         FROM test_meal_logs m
         LEFT JOIN users u ON m.phone_number = u.phone_number
         GROUP BY m.phone_number
@@ -170,6 +171,14 @@ def view_dashboard(
     )
     raw_meals = c.fetchall()
 
+    logged_dates = {}
+    for _, m_phone, m_ts, *_ in raw_meals:
+        logged_dates.setdefault(m_phone, set()).add(str(m_ts).replace("T", " ")[:10])
+    logged_day_index = {
+        m_phone: {d: i + 1 for i, d in enumerate(sorted(dates))}
+        for m_phone, dates in logged_dates.items()
+    }
+
     # -------------------------------------------------------------
     # Helper to parse dates safely
     # -------------------------------------------------------------
@@ -194,7 +203,7 @@ def view_dashboard(
     # Build Table 1 Rows (Participants)
     # -------------------------------------------------------------
     participant_rows = []
-    for phone, first_int, last_int, user_status in participant_records:
+    for phone, first_int, last_int, user_status, days_logged in participant_records:
         print(f"[Dashboard Row] Rendering {phone}...")
         first_dt = None
         last_dt = None
@@ -213,14 +222,11 @@ def view_dashboard(
         # 1. Determine inactivity strictly within the active study window
         is_silent_24h = bool(last_dt and last_dt < cutoff_24h)
 
-        # 2. Calculate raw study day
-        study_day = 0
-        if first_dt:
-            anchor_date = last_dt.date() if (is_silent_24h and last_dt) else today_date
-            study_day = (anchor_date - first_dt.date()).days + 1
+        # 2. Study day = number of different days with a logged meal (no log, no progress)
+        study_day = days_logged or 0
 
         # 3. RULE: Completion takes absolute precedence
-        if study_day >= 15:
+        if study_day >= STUDY_LENGTH_DAYS:
             status_label = "completed"
             badge_style = "background:#f1f5f9; color:#475569; border:1px solid #cbd5e1;"
             day_badge = (
@@ -271,10 +277,8 @@ def view_dashboard(
 
         # Calculate Study Day
         try:
-            log_dt = datetime.fromisoformat(str(ts_str))
-            reg_date = user_starts.get(phone, log_dt.date())
-            raw_calc_day = (log_dt.date() - reg_date).days + 1
-            calc_day = max(1, min(15, raw_calc_day))
+            raw_calc_day = logged_day_index[phone][str(ts_str).replace("T", " ")[:10]]
+            calc_day = max(1, min(STUDY_LENGTH_DAYS, raw_calc_day))
             day_label = f"Day {calc_day}"
         except Exception:
             calc_day = 1
@@ -776,8 +780,8 @@ COMPLETION_TEMPLATE_NAME = "day_15"
 DROPOFF_TEMPLATE_NAME = "dropoff_1"
 TEMPLATE_LANGUAGE = os.getenv("TEMPLATE_LANGUAGE", "en")  # "en_US" if the templates were created as English (US)
 
+# A study day only counts if a meal was logged that day: 15 logged days = completed
 STUDY_LENGTH_DAYS = 15
-MIN_DAYS_LOGGED_TO_COMPLETE = 10  # Thank-you only if meals were logged on at least this many days
 DROPOFF_SILENCE = timedelta(hours=24)
 
 # Safety switch: until TEMPLATES_LIVE=1 is set, the scheduled/triggered day_15 and dropoff_1
@@ -860,8 +864,6 @@ def get_participant_activity(c):
                 "first_log": first_dt,
                 "last_post": last_post,
                 "hours_silent": round((now - last_post).total_seconds() / 3600, 1),
-                "study_day_today": (now.date() - first_dt.date()).days + 1,
-                "study_day_of_last_post": (last_post.date() - first_dt.date()).days + 1,
                 "dropoff_sent": bool(dropoff_sent),
                 "completed_notified": bool(completed_notified),
                 "days_logged": days_logged,
@@ -901,18 +903,18 @@ def send_template(phone_number: str, template_name: str) -> bool:
         return False
 
 
+def completion_skip_reason(p):
+    """Why a participant would NOT get day_15 right now (None = they would get it)."""
+    if p["completed_notified"]:
+        return "thank-you already sent"
+    if p["days_logged"] < STUDY_LENGTH_DAYS:
+        return f"logged on {p['days_logged']} of {STUDY_LENGTH_DAYS} days"
+    return None
+
+
 def find_completion_candidates(c):
-    """Day 15 (or 16, to catch late loggers) AND logged meals on at least 10 different days."""
-    candidates = []
-    for p in get_participant_activity(c):
-        if p["completed_notified"]:
-            continue
-        if not (STUDY_LENGTH_DAYS <= p["study_day_today"] <= STUDY_LENGTH_DAYS + 1):
-            continue
-        if p["days_logged"] < MIN_DAYS_LOGGED_TO_COMPLETE:
-            continue  # Dropped off before finishing: no thank-you
-        candidates.append(p)
-    return candidates
+    """Logged a meal on 15 different days and hasn't been sent the thank-you yet."""
+    return [p for p in get_participant_activity(c) if completion_skip_reason(p) is None]
 
 
 def check_and_send_study_completions(dry_run: bool = None):
@@ -951,6 +953,66 @@ def check_and_send_study_completions(dry_run: bool = None):
     return {"dry_run": dry_run, "eligible": candidates, "sent": sent}
 
 
+def find_status_corrections(c):
+    """Participants marked 'completed' (by the old day-15 job) without 15 logged days.
+
+    They are moved to 'dropped_out' (stops all nudges). completed_notified is left
+    untouched: it records that a thank-you was actually sent to them.
+    """
+    return [
+        {**p, "new_status": "dropped_out"}
+        for p in get_participant_activity(c)
+        if p["status"] == "completed" and p["days_logged"] < STUDY_LENGTH_DAYS
+    ]
+
+
+def apply_status_corrections():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    corrections = find_status_corrections(c)
+    for p in corrections:
+        c.execute(
+            "UPDATE users SET status = ? WHERE phone_number = ?",
+            (p["new_status"], p["phone"]),
+        )
+    conn.commit()
+    conn.close()
+    print(f"[Status Fix] Marked {len(corrections)} participant(s) as dropped_out.")
+    return corrections
+
+
+@app.get("/admin/fix-statuses")
+def fix_statuses(apply: bool = False):
+    """Preview (default) or apply=true: move wrongly 'completed' participants to dropped_out."""
+    if apply:
+        changed = apply_status_corrections()
+        return {"applied": True, "count": len(changed), "changed": changed}
+    conn = sqlite3.connect(DB_FILE)
+    corrections = find_status_corrections(conn.cursor())
+    conn.close()
+    return {"applied": False, "count": len(corrections), "would_change": corrections}
+
+
+@app.get("/admin/reset-completions")
+def reset_completions(apply: bool = False):
+    """Clears every completed_notified flag so day_15 can be (re)sent.
+
+    The old day-15 job recorded thank-yous that participants never received. Preview by
+    default; apply=true clears the flags. Run /admin/trigger-completions afterwards: it
+    only sends to participants with 15 logged days.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT phone_number FROM users WHERE completed_notified = 1")
+    phones = [row[0] for row in c.fetchall()]
+    if apply:
+        c.execute("UPDATE users SET completed_notified = 0 WHERE completed_notified = 1")
+        conn.commit()
+        print(f"[Completion Reset] Cleared thank-you flag for {len(phones)} participant(s).")
+    conn.close()
+    return {"applied": apply, "count": len(phones), "phones": phones}
+
+
 # Optional: Keep the manual endpoint as a backup trigger if you ever want to force it
 @app.get("/admin/trigger-completions")
 def manual_trigger_completions():
@@ -964,12 +1026,23 @@ def manual_trigger_completions():
 
 
 @app.get("/admin/preview-completions")
-def preview_completions():
-    """Lists who would get the day_15 thank-you right now. Never sends."""
+def preview_completions(show_all: bool = False):
+    """Lists who would get the day_15 thank-you right now. Never sends.
+
+    ?show_all=true also lists every other participant with the reason they are skipped.
+    """
     conn = sqlite3.connect(DB_FILE)
-    candidates = find_completion_candidates(conn.cursor())
+    participants = get_participant_activity(conn.cursor())
     conn.close()
-    return {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
+    candidates = [p for p in participants if completion_skip_reason(p) is None]
+    result = {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
+    if show_all:
+        result["skipped"] = [
+            {**p, "skip_reason": completion_skip_reason(p)}
+            for p in participants
+            if completion_skip_reason(p) is not None
+        ]
+    return result
 
 
 @app.get("/admin/test-template")
@@ -1075,8 +1148,8 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
                     row = c.fetchone()
                     current_status = row[0] if row else None
 
-                    # NEVER downgrade a completed participant back to active
-                    if current_status != "completed":
+                    # NEVER move a completed or dropped-out participant back to active
+                    if current_status not in ("completed", "dropped_out"):
                         c.execute(
                             "UPDATE users SET status = 'active', dropoff_sent = 0,"
                             " last_inbound_at = ? WHERE phone_number = ?",
@@ -1301,16 +1374,17 @@ def start_scheduler():
         misfire_grace_time=3600,
         id="auto_completion_checker",
     )
+    # DROP-OFFS PAUSED: focusing on the completion flow. Uncomment to re-enable.
     # Hourly between 9 AM and 9 PM IST, so a drop-off goes out within an hour of the
     # participant crossing 24h of silence (never in the middle of the night)
-    scheduler.add_job(
-        check_and_send_dropoffs,
-        "cron",
-        hour="9-21",
-        minute=15,
-        id="dropoff_nudge_checker",
-        misfire_grace_time=1800,
-    )
+    # scheduler.add_job(
+    #     check_and_send_dropoffs,
+    #     "cron",
+    #     hour="9-21",
+    #     minute=15,
+    #     id="dropoff_nudge_checker",
+    #     misfire_grace_time=1800,
+    # )
 
     scheduler.start()
     print("[System] Background scheduler initialized on IST time.")
@@ -1320,19 +1394,14 @@ def dropoff_skip_reason(p):
     """Why a participant would NOT get dropoff_1 right now (None = they would get it)."""
     if p["status"] == "completed":
         return "completed the study"
+    if p["status"] == "dropped_out":
+        return "dropped out"
     if p["dropoff_sent"]:
         return "drop-off already sent for this silence (re-arms when they post again)"
     if p["hours_silent"] < DROPOFF_SILENCE.total_seconds() / 3600:
         return "posted within the last 24 hours"
-    if p["study_day_of_last_post"] >= STUDY_LENGTH_DAYS:
-        return "went quiet on/after day 15: finished, not a drop-off"
-    if p["study_day_today"] > STUDY_LENGTH_DAYS:
-        return "their 15 days are over: too late to re-engage"
-    if (
-        p["study_day_today"] >= STUDY_LENGTH_DAYS
-        and p["days_logged"] >= MIN_DAYS_LOGGED_TO_COMPLETE
-    ):
-        return "already qualifies for the thank-you instead"
+    if p["days_logged"] >= STUDY_LENGTH_DAYS:
+        return "logged all 15 days: gets the thank-you instead"
     return None
 
 
@@ -1378,6 +1447,8 @@ def check_and_send_dropoffs(dry_run: bool = None):
 
 @app.get("/admin/trigger-dropoffs")
 def trigger_dropoffs_now():
+    # DROP-OFFS PAUSED: focusing on the completion flow. Remove this return to re-enable.
+    return {"status": "disabled", "detail": "Drop-offs are paused"}
     result = check_and_send_dropoffs()
     return {
         "status": "success",
