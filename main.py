@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, Response, BackgroundTasks
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 import io
+import threading
 from PIL import Image
 from pydantic import BaseModel
 from datetime import datetime, time as dtime, timedelta
@@ -777,34 +778,7 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
                 json.dump(gemini_output, json_file, indent=2, ensure_ascii=False)
 
             if conn and meal_log_id:
-                c.execute(
-                    """
-                    INSERT INTO meal_nutrition (
-                        meal_log_id, phone_number, identified_items, meal_type,
-                        food_source_type, staple_format, protein_grams, carbs_grams,
-                        fat_grams, fiber_grams, protein_source_present, protein_source_type,
-                        is_caffeine_or_sugar_crutch, primary_fuel_source, crash_risk_level, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        meal_log_id,
-                        sender,
-                        json.dumps(gemini_output.get("identified_items", [])),
-                        gemini_output.get("meal_type"),
-                        gemini_output.get("food_source_type"),
-                        gemini_output.get("staple_format"),
-                        gemini_output.get("estimated_protein_grams", 0.0),
-                        gemini_output.get("estimated_carbs_grams", 0.0),
-                        gemini_output.get("estimated_fat_grams", 0.0),
-                        gemini_output.get("estimated_fiber_grams", 0.0),
-                        gemini_output.get("protein_source_present", False),
-                        gemini_output.get("protein_source_type"),
-                        gemini_output.get("is_caffeine_or_sugar_crutch", False),
-                        gemini_output.get("primary_fuel_source"),
-                        gemini_output.get("crash_risk_level"),
-                        json.dumps(gemini_output),
-                    ),
-                )
+                save_meal_nutrition(c, meal_log_id, sender, gemini_output)
                 conn.commit()
 
         except Exception as e:
@@ -827,6 +801,111 @@ def process_incoming_meal(media_id: str, sender: str, caption: str):
     finally:
         if conn:
             conn.close()
+
+
+def save_meal_nutrition(c, meal_log_id, sender, output: dict):
+    c.execute(
+        """
+        INSERT INTO meal_nutrition (
+            meal_log_id, phone_number, identified_items, meal_type,
+            food_source_type, staple_format, protein_grams, carbs_grams,
+            fat_grams, fiber_grams, protein_source_present, protein_source_type,
+            is_caffeine_or_sugar_crutch, primary_fuel_source, crash_risk_level, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            meal_log_id,
+            sender,
+            json.dumps(output.get("identified_items", [])),
+            output.get("meal_type"),
+            output.get("food_source_type"),
+            output.get("staple_format"),
+            output.get("estimated_protein_grams", 0.0),
+            output.get("estimated_carbs_grams", 0.0),
+            output.get("estimated_fat_grams", 0.0),
+            output.get("estimated_fiber_grams", 0.0),
+            output.get("protein_source_present", False),
+            output.get("protein_source_type"),
+            output.get("is_caffeine_or_sugar_crutch", False),
+            output.get("primary_fuel_source"),
+            output.get("crash_risk_level"),
+            json.dumps(output),
+        ),
+    )
+
+
+# --- BACKFILL: re-run the vision analysis on photos that never got one ---
+
+BACKFILL_GAP_SECONDS = float(os.getenv("BACKFILL_GAP_SECONDS", "3"))
+backfill_state = {"running": False, "total": 0, "done": 0, "failed": []}
+
+
+def find_unanalysed_photos(c, phone: str = None):
+    """Photo logs with no meal_nutrition row. Returns (analysable, missing_file)."""
+    query = """
+        SELECT m.id, m.phone_number, m.image_path, m.caption
+        FROM test_meal_logs m
+        WHERE m.image_path IS NOT NULL AND m.image_path != 'text_only'
+          AND NOT EXISTS (SELECT 1 FROM meal_nutrition n WHERE n.meal_log_id = m.id)
+    """
+    params = ()
+    if phone:
+        query += " AND m.phone_number = ?"
+        params = (phone,)
+    c.execute(query + " ORDER BY m.timestamp", params)
+    analysable, missing = [], []
+    for row in c.fetchall():
+        (analysable if os.path.exists(row[2]) else missing).append(row)
+    return analysable, missing
+
+
+def run_backfill(rows):
+    backfill_state.update(running=True, total=len(rows), done=0, failed=[])
+    try:
+        for log_id, phone, img_path, caption in rows:
+            try:
+                output = run_gemini_vision_pipeline(img_path, caption or "")
+                with open(f"{os.path.splitext(img_path)[0]}_analysis.json", "w", encoding="utf-8") as jf:
+                    json.dump(output, jf, indent=2, ensure_ascii=False)
+                conn = sqlite3.connect(DB_FILE)
+                save_meal_nutrition(conn.cursor(), log_id, phone, output)
+                conn.commit()
+                conn.close()
+                backfill_state["done"] += 1
+                print(f"[Backfill] Analysed log {log_id} ({backfill_state['done']}/{len(rows)})")
+            except Exception as e:
+                backfill_state["failed"].append({"meal_log_id": log_id, "error": str(e)[:200]})
+                print(f"[Backfill] Failed log {log_id}: {e}")
+            time.sleep(BACKFILL_GAP_SECONDS)
+    finally:
+        backfill_state["running"] = False
+        print(f"[Backfill] Finished: {backfill_state['done']} analysed, {len(backfill_state['failed'])} failed.")
+
+
+@app.get("/admin/backfill-analysis")
+def backfill_analysis(apply: bool = False, phone: str = None):
+    """Preview (default) or apply=true: analyse photos that have no nutrition data yet.
+
+    Runs in the background, one photo every few seconds. Re-open this URL (without apply)
+    to see progress; photos that fail stay unanalysed and can be retried with apply=true.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    analysable, missing = find_unanalysed_photos(conn.cursor(), phone)
+    conn.close()
+    status = {
+        "unanalysed_photos": len(analysable),
+        "photo_file_missing": len(missing),
+        "backfill": dict(backfill_state),
+    }
+    if apply:
+        if backfill_state["running"]:
+            status["started"] = False
+            status["detail"] = "A backfill is already running"
+        elif analysable:
+            threading.Thread(target=run_backfill, args=(analysable,), daemon=True).start()
+            status["started"] = True
+            status["detail"] = f"Analysing {len(analysable)} photo(s), ~{BACKFILL_GAP_SECONDS:.0f}s apart"
+    return status
 
 
 def get_default_meal_type(timestamp_str: str) -> str:
