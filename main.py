@@ -901,18 +901,22 @@ def send_template(phone_number: str, template_name: str) -> bool:
         return False
 
 
+def completion_skip_reason(p):
+    """Why a participant would NOT get day_15 right now (None = they would get it)."""
+    if p["completed_notified"]:
+        return "thank-you already sent"
+    if p["study_day_today"] < STUDY_LENGTH_DAYS:
+        return f"not at day {STUDY_LENGTH_DAYS} yet (day {p['study_day_today']})"
+    if p["study_day_today"] > STUDY_LENGTH_DAYS + 1:
+        return "past the day 15-16 thank-you window"
+    if p["days_logged"] < MIN_DAYS_LOGGED_TO_COMPLETE:
+        return f"logged on only {p['days_logged']} days (needs {MIN_DAYS_LOGGED_TO_COMPLETE})"
+    return None
+
+
 def find_completion_candidates(c):
     """Day 15 (or 16, to catch late loggers) AND logged meals on at least 10 different days."""
-    candidates = []
-    for p in get_participant_activity(c):
-        if p["completed_notified"]:
-            continue
-        if not (STUDY_LENGTH_DAYS <= p["study_day_today"] <= STUDY_LENGTH_DAYS + 1):
-            continue
-        if p["days_logged"] < MIN_DAYS_LOGGED_TO_COMPLETE:
-            continue  # Dropped off before finishing: no thank-you
-        candidates.append(p)
-    return candidates
+    return [p for p in get_participant_activity(c) if completion_skip_reason(p) is None]
 
 
 def check_and_send_study_completions(dry_run: bool = None):
@@ -1014,12 +1018,23 @@ def manual_trigger_completions():
 
 
 @app.get("/admin/preview-completions")
-def preview_completions():
-    """Lists who would get the day_15 thank-you right now. Never sends."""
+def preview_completions(show_all: bool = False):
+    """Lists who would get the day_15 thank-you right now. Never sends.
+
+    ?show_all=true also lists every other participant with the reason they are skipped.
+    """
     conn = sqlite3.connect(DB_FILE)
-    candidates = find_completion_candidates(conn.cursor())
+    participants = get_participant_activity(conn.cursor())
     conn.close()
-    return {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
+    candidates = [p for p in participants if completion_skip_reason(p) is None]
+    result = {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
+    if show_all:
+        result["skipped"] = [
+            {**p, "skip_reason": completion_skip_reason(p)}
+            for p in participants
+            if completion_skip_reason(p) is not None
+        ]
+    return result
 
 
 @app.get("/admin/test-template")
