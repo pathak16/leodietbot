@@ -13,7 +13,12 @@ from PIL import Image
 from pydantic import BaseModel
 from datetime import datetime, time as dtime, timedelta
 import html as html_escape
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from starlette.background import BackgroundTask
+import csv
+import re
+import tempfile
+import zipfile
 
 load_dotenv()
 
@@ -531,6 +536,75 @@ def init_storage():
 
 DATA_DIR, IMAGE_DIR, DB_FILE = init_storage()
 app.mount("/view-images", StaticFiles(directory=IMAGE_DIR), name="images")
+
+
+def _slug(text: str, max_len: int = 40) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", text or "").strip("-")[:max_len] or "photo"
+
+
+@app.get("/admin/export-photos")
+def export_photos(phone: str = None):
+    """Downloads a ZIP of all meal photos, organised by participant and study day.
+
+    <phone>/Day_NN_<date>/<time>_<meal type>_<caption>.jpg, where Day N is the Nth
+    day the participant logged a meal. meals.csv lists every log (text-only too).
+    Times are server time (UTC), the same as the dashboard. ?phone=91... exports one person.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    query = (
+        "SELECT id, phone_number, timestamp, caption, image_path, meal_type"
+        " FROM test_meal_logs"
+    )
+    params = ()
+    if phone:
+        query += " WHERE phone_number = ?"
+        params = (phone,)
+    c.execute(query + " ORDER BY phone_number, timestamp", params)
+    logs = c.fetchall()
+    conn.close()
+
+    # Day N = Nth distinct date with a logged meal, per participant
+    dates_by_phone = {}
+    for _, p, ts, *_ in logs:
+        dates_by_phone.setdefault(p, set()).add(str(ts).replace("T", " ")[:10])
+    day_index = {
+        p: {d: i + 1 for i, d in enumerate(sorted(dates))}
+        for p, dates in dates_by_phone.items()
+    }
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    index_rows = []
+    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        for log_id, p, ts, caption, img_path, meal_type in logs:
+            ts_clean = str(ts).replace("T", " ")[:19]
+            date = ts_clean[:10]
+            day = day_index[p][date]
+            zip_path = "(text only)" if (not img_path or img_path == "text_only") else "(photo file missing)"
+            if img_path and img_path != "text_only" and os.path.exists(img_path):
+                name = f"{ts_clean[11:19].replace(':', '')}_{meal_type or 'meal'}_{_slug(caption)}_{log_id}.jpg"
+                zip_path = f"{p}/Day_{day:02d}_{date}/{name}"
+                zf.write(img_path, zip_path)
+            index_rows.append(
+                [p, day, date, ts_clean, meal_type or "", caption or "", zip_path]
+            )
+
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(
+            ["phone", "study_day", "date", "timestamp_utc", "meal_type", "caption", "photo_in_zip"]
+        )
+        writer.writerows(index_rows)
+        zf.writestr("meals.csv", buf.getvalue())
+
+    filename = f"leodietbot_photos_{phone or 'all'}_{datetime.now():%Y%m%d}.zip"
+    return FileResponse(
+        tmp.name,
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(os.remove, tmp.name),
+    )
 
 
 # 1. Initialize SQLite Database
