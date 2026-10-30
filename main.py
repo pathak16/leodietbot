@@ -777,6 +777,7 @@ DROPOFF_TEMPLATE_NAME = "dropoff_1"
 TEMPLATE_LANGUAGE = os.getenv("TEMPLATE_LANGUAGE", "en")  # "en_US" if the templates were created as English (US)
 
 STUDY_LENGTH_DAYS = 15
+MIN_DAYS_LOGGED_TO_COMPLETE = 10  # Thank-you only if meals were logged on at least this many days
 DROPOFF_SILENCE = timedelta(hours=24)
 
 # Safety switch: until TEMPLATES_LIVE=1 is set, the scheduled/triggered day_15 and dropoff_1
@@ -822,7 +823,8 @@ def get_participant_activity(c):
             u.status,
             u.last_inbound_at,
             u.dropoff_sent,
-            u.completed_notified
+            u.completed_notified,
+            COUNT(DISTINCT substr(m.timestamp, 1, 10)) AS days_logged
         FROM test_meal_logs m
         LEFT JOIN users u ON m.phone_number = u.phone_number
         GROUP BY m.phone_number
@@ -838,6 +840,7 @@ def get_participant_activity(c):
         last_inbound_at,
         dropoff_sent,
         completed_notified,
+        days_logged,
     ) in c.fetchall():
         first_dt = _parse_db_ts(first_log)
         if not first_dt:
@@ -861,6 +864,7 @@ def get_participant_activity(c):
                 "study_day_of_last_post": (last_post.date() - first_dt.date()).days + 1,
                 "dropoff_sent": bool(dropoff_sent),
                 "completed_notified": bool(completed_notified),
+                "days_logged": days_logged,
             }
         )
     return participants
@@ -898,14 +902,14 @@ def send_template(phone_number: str, template_name: str) -> bool:
 
 
 def find_completion_candidates(c):
-    """Day 15 (or 16, to catch late posters) AND still active: posted within the last 24 hours."""
+    """Day 15 (or 16, to catch late loggers) AND logged meals on at least 10 different days."""
     candidates = []
     for p in get_participant_activity(c):
         if p["completed_notified"]:
             continue
         if not (STUDY_LENGTH_DAYS <= p["study_day_today"] <= STUDY_LENGTH_DAYS + 1):
             continue
-        if p["hours_silent"] >= DROPOFF_SILENCE.total_seconds() / 3600:
+        if p["days_logged"] < MIN_DAYS_LOGGED_TO_COMPLETE:
             continue  # Dropped off before finishing: no thank-you
         candidates.append(p)
     return candidates
@@ -1324,6 +1328,11 @@ def find_dropoff_candidates(c):
             continue  # Went quiet on/after day 15: finished, not a drop-off
         if p["study_day_today"] > STUDY_LENGTH_DAYS:
             continue  # Their 15 days are over: too late to re-engage
+        if (
+            p["study_day_today"] >= STUDY_LENGTH_DAYS
+            and p["days_logged"] >= MIN_DAYS_LOGGED_TO_COMPLETE
+        ):
+            continue  # Already qualifies for the thank-you instead
         candidates.append(p)
     return candidates
 
