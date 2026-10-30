@@ -1316,25 +1316,29 @@ def start_scheduler():
     print("[System] Background scheduler initialized on IST time.")
 
 
+def dropoff_skip_reason(p):
+    """Why a participant would NOT get dropoff_1 right now (None = they would get it)."""
+    if p["status"] == "completed":
+        return "completed the study"
+    if p["dropoff_sent"]:
+        return "drop-off already sent for this silence (re-arms when they post again)"
+    if p["hours_silent"] < DROPOFF_SILENCE.total_seconds() / 3600:
+        return "posted within the last 24 hours"
+    if p["study_day_of_last_post"] >= STUDY_LENGTH_DAYS:
+        return "went quiet on/after day 15: finished, not a drop-off"
+    if p["study_day_today"] > STUDY_LENGTH_DAYS:
+        return "their 15 days are over: too late to re-engage"
+    if (
+        p["study_day_today"] >= STUDY_LENGTH_DAYS
+        and p["days_logged"] >= MIN_DAYS_LOGGED_TO_COMPLETE
+    ):
+        return "already qualifies for the thank-you instead"
+    return None
+
+
 def find_dropoff_candidates(c):
     """Silent for more than 24h since their last post, mid-study, and not yet nudged for this silence."""
-    candidates = []
-    for p in get_participant_activity(c):
-        if p["status"] == "completed" or p["dropoff_sent"]:
-            continue
-        if p["hours_silent"] < DROPOFF_SILENCE.total_seconds() / 3600:
-            continue
-        if p["study_day_of_last_post"] >= STUDY_LENGTH_DAYS:
-            continue  # Went quiet on/after day 15: finished, not a drop-off
-        if p["study_day_today"] > STUDY_LENGTH_DAYS:
-            continue  # Their 15 days are over: too late to re-engage
-        if (
-            p["study_day_today"] >= STUDY_LENGTH_DAYS
-            and p["days_logged"] >= MIN_DAYS_LOGGED_TO_COMPLETE
-        ):
-            continue  # Already qualifies for the thank-you instead
-        candidates.append(p)
-    return candidates
+    return [p for p in get_participant_activity(c) if dropoff_skip_reason(p) is None]
 
 
 def check_and_send_dropoffs(dry_run: bool = None):
@@ -1384,9 +1388,20 @@ def trigger_dropoffs_now():
 
 
 @app.get("/admin/preview-dropoffs")
-def preview_dropoffs():
-    """Lists who would get the dropoff_1 template right now. Never sends."""
+def preview_dropoffs(show_all: bool = False):
+    """Lists who would get the dropoff_1 template right now. Never sends.
+
+    ?show_all=true also lists every other participant with the reason they are skipped.
+    """
     conn = sqlite3.connect(DB_FILE)
-    candidates = find_dropoff_candidates(conn.cursor())
+    participants = get_participant_activity(conn.cursor())
     conn.close()
-    return {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
+    candidates = [p for p in participants if dropoff_skip_reason(p) is None]
+    result = {"templates_live": TEMPLATES_LIVE, "count": len(candidates), "would_send_to": candidates}
+    if show_all:
+        result["skipped"] = [
+            {**p, "skip_reason": dropoff_skip_reason(p)}
+            for p in participants
+            if dropoff_skip_reason(p) is not None
+        ]
+    return result
