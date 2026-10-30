@@ -951,6 +951,56 @@ def check_and_send_study_completions(dry_run: bool = None):
     return {"dry_run": dry_run, "eligible": candidates, "sent": sent}
 
 
+def find_status_corrections(c):
+    """Participants past day 16 whose status doesn't match what they actually logged.
+
+    Fewer than MIN_DAYS_LOGGED_TO_COMPLETE logged days -> 'dropped_out' (stops all nudges).
+    completed_notified is left untouched: it records that a thank-you was sent.
+    """
+    corrections = []
+    for p in get_participant_activity(c):
+        if p["study_day_today"] <= STUDY_LENGTH_DAYS + 1:
+            continue  # Still inside the thank-you window
+        if p["days_logged"] < MIN_DAYS_LOGGED_TO_COMPLETE and p["status"] != "dropped_out":
+            corrections.append({**p, "new_status": "dropped_out"})
+    return corrections
+
+
+def apply_status_corrections():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    corrections = find_status_corrections(c)
+    for p in corrections:
+        c.execute(
+            """
+            INSERT INTO users (phone_number, status) VALUES (?, ?)
+            ON CONFLICT(phone_number) DO UPDATE SET status = excluded.status
+        """,
+            (p["phone"], p["new_status"]),
+        )
+    conn.commit()
+    conn.close()
+    print(f"[Status Fix] Marked {len(corrections)} participant(s) as dropped_out.")
+    return corrections
+
+
+def run_daily_completion_job():
+    apply_status_corrections()
+    check_and_send_study_completions()
+
+
+@app.get("/admin/fix-statuses")
+def fix_statuses(apply: bool = False):
+    """Preview (default) or apply=true: mark past-day-16 participants with <10 logged days as dropped_out."""
+    if apply:
+        changed = apply_status_corrections()
+        return {"applied": True, "count": len(changed), "changed": changed}
+    conn = sqlite3.connect(DB_FILE)
+    corrections = find_status_corrections(conn.cursor())
+    conn.close()
+    return {"applied": False, "count": len(corrections), "would_change": corrections}
+
+
 # Optional: Keep the manual endpoint as a backup trigger if you ever want to force it
 @app.get("/admin/trigger-completions")
 def manual_trigger_completions():
@@ -1075,8 +1125,8 @@ async def handle_incoming(request: Request, bg_tasks: BackgroundTasks):
                     row = c.fetchone()
                     current_status = row[0] if row else None
 
-                    # NEVER downgrade a completed participant back to active
-                    if current_status != "completed":
+                    # NEVER move a completed or dropped-out participant back to active
+                    if current_status not in ("completed", "dropped_out"):
                         c.execute(
                             "UPDATE users SET status = 'active', dropoff_sent = 0,"
                             " last_inbound_at = ? WHERE phone_number = ?",
@@ -1294,7 +1344,7 @@ def start_scheduler():
         args=[2, "dinner_nudge_2"],
     )
     scheduler.add_job(
-        check_and_send_study_completions,
+        run_daily_completion_job,
         "cron",
         hour=11,
         minute=30,
@@ -1320,6 +1370,8 @@ def dropoff_skip_reason(p):
     """Why a participant would NOT get dropoff_1 right now (None = they would get it)."""
     if p["status"] == "completed":
         return "completed the study"
+    if p["status"] == "dropped_out":
+        return "dropped out (study period over)"
     if p["dropoff_sent"]:
         return "drop-off already sent for this silence (re-arms when they post again)"
     if p["hours_silent"] < DROPOFF_SILENCE.total_seconds() / 3600:
