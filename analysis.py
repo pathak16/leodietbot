@@ -11,6 +11,24 @@ import base64
 # genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
+# Vision models to try, in order, comma-separated (Railway variable VISION_MODELS).
+# Groq's daily token limit (TPD) is per model, so when one model's daily
+# allowance runs out we switch to the next one for the rest of the day.
+VISION_MODELS = [m.strip() for m in os.getenv("VISION_MODELS", "qwen/qwen3.8-27b").split(",") if m.strip()]
+_exhausted_models = {}  # model -> time.time() when its daily limit was hit
+_EXHAUSTED_FOR_SECONDS = 6 * 3600
+
+
+def _is_daily_limit_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "429" in msg and ("per day" in msg or "(tpd)" in msg or "(rpd)" in msg)
+
+
+def _available_models():
+    now = time.time()
+    return [m for m in VISION_MODELS
+            if now - _exhausted_models.get(m, 0) > _EXHAUSTED_FOR_SECONDS]
+
 
 def encode_image(image_path: str) -> str:
     with open(image_path, "rb") as image_file:
@@ -118,33 +136,45 @@ Return ONLY a valid JSON object matching this schema:
 }}
 """
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model="qwen/qwen3.8-27b",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}"
-                                },
-                            },
-                        ],
-                    }
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.2,
-            )
-            return json.loads(response.choices[0].message.content)
+    models = _available_models()
+    if not models:
+        raise RuntimeError("Daily Groq limit reached on every model in VISION_MODELS; try again later.")
 
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"[Groq Retry] Attempt {attempt + 1} failed: {e}. Retrying...")
-                time.sleep(2)
-            else:
-                raise
+    last_error = None
+    for model in models:
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}"
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                )
+                return json.loads(response.choices[0].message.content)
+
+            except Exception as e:
+                last_error = e
+                if _is_daily_limit_error(e):
+                    print(f"[Groq] Daily limit hit on {model}; switching to the next model.")
+                    _exhausted_models[model] = time.time()
+                    break
+                if attempt < max_retries - 1:
+                    print(f"[Groq Retry] {model} attempt {attempt + 1} failed: {e}. Retrying...")
+                    time.sleep(2)
+                else:
+                    raise
+    raise last_error
